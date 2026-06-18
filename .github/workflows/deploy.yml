@@ -94,7 +94,9 @@ jobs:
               TMP="$(mktemp)"
               awk -v s="$S" -v e="$E" '$0==s{skip=1;next} $0==e{skip=0;next} skip!=1{print}' "$SHARED" > "$TMP"
               { echo "$S"; cat "${{ env.STACK_DIR }}/Caddyfile"; echo "$E"; } >> "$TMP"
-              mv "$TMP" "$SHARED"
+              # Preserve the bind-mounted file's inode so Caddy sees the update.
+              cat "$TMP" > "$SHARED"
+              rm -f "$TMP"
             fi
 
             # Validate + reload the shared edge (Caddy runs in /opt/workout):
