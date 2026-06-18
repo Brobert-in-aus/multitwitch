@@ -1,4 +1,4 @@
-{% set asset_version = 59 %}
+{% set asset_version = 60 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -37,6 +37,7 @@ $(document).ready(function() {
     load_saved_main_size_fractions();
     set_layout_mode(load_saved_layout_mode());
     render_current_streams();
+    render_presets();
     render_stream_together_actions();
     auto_check_stream_together(streams.slice());
     initialize_twitch();
@@ -70,6 +71,17 @@ $(window).resize(function() {
         <div class="add_stream_row">
             <input type="text" id="add_stream_input" placeholder="Add a channel" autocomplete="off" onkeyup="add_stream_keyup(event)" />
             <button type="button" class="panel_button primary" onclick="submit_add_stream()">Add</button>
+        </div>
+    </div>
+
+    <div class="panel_section" id="presets_panel">
+        <div class="section_header">
+            <span>Presets</span>
+        </div>
+        <div id="presets_list"></div>
+        <div class="add_stream_row">
+            <input type="text" id="preset_name_input" placeholder="Save lineup as&hellip;" autocomplete="off" onkeyup="preset_name_keyup(event)" />
+            <button type="button" class="panel_button primary" onclick="save_current_preset()">Save</button>
         </div>
     </div>
 

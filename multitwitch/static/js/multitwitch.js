@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "59";
+var APP_VERSION = "60";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -605,6 +605,7 @@ function remove_stream(name) {
     sync_active_stream_audio();
     optimize_size(streams.length);
     render_followed_channels();
+    render_presets();
     load_current_stream_metadata();
 }
 
@@ -915,6 +916,122 @@ function unlock_audio() {
     }
     audio_unlocked = true;
     sync_active_stream_audio();
+}
+
+// Saved lineups: a localStorage list of {name, streams}. Loading one reconciles
+// the current lineup to the preset (keeping shared tiles) rather than reloading.
+var PRESETS_STORAGE_KEY = "multitwitch.presets";
+
+function load_presets() {
+    try {
+        var parsed = JSON.parse(window.localStorage.getItem(PRESETS_STORAGE_KEY) || "[]");
+        if (Array.isArray(parsed)) {
+            return parsed.filter(function(p) {
+                return p && typeof p.name === "string" && Array.isArray(p.streams);
+            });
+        }
+    } catch (e) {}
+    return [];
+}
+
+function save_presets(presets) {
+    try {
+        window.localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+    } catch (e) {}
+}
+
+function preset_name_keyup(e) {
+    if (e.keyCode == 13 || e.which == 13) {
+        save_current_preset();
+        return false;
+    }
+    return true;
+}
+
+function save_current_preset() {
+    var input = $("#preset_name_input");
+    var name = $.trim(input.val());
+    if (!name || streams.length === 0) {
+        return;
+    }
+    var presets = load_presets().filter(function(p) {
+        return p.name.toLowerCase() !== name.toLowerCase();
+    });
+    presets.push({name: name, streams: streams.slice()});
+    presets.sort(function(a, b) {
+        return a.name.toLowerCase().localeCompare(b.name.toLowerCase());
+    });
+    save_presets(presets);
+    input.val("");
+    render_presets();
+}
+
+function remove_preset(name) {
+    save_presets(load_presets().filter(function(p) {
+        return p.name !== name;
+    }));
+    render_presets();
+}
+
+function load_preset(target) {
+    var valid = [];
+    for (var i = 0; i < target.length; i++) {
+        var channel = $.trim(target[i]).toLowerCase();
+        if (/^[a-z0-9_]{1,25}$/.test(channel) && valid.indexOf(channel) == -1) {
+            valid.push(channel);
+        }
+    }
+    if (!valid.length) {
+        return;
+    }
+    streams.slice().forEach(function(name) {
+        if (valid.indexOf(name) == -1) {
+            remove_stream(name);
+        }
+    });
+    valid.forEach(function(name) {
+        if (streams.indexOf(name) == -1) {
+            add_stream(name);
+        }
+    });
+    reorder_stream_tiles(valid);
+    sync_stream_order_from_dom();
+    render_presets();
+}
+
+function render_presets() {
+    var list = $("#presets_list");
+    if (list.length === 0) {
+        return;
+    }
+    list.empty();
+    var presets = load_presets();
+    if (!presets.length) {
+        list.append($("<div>", {"class": "empty_state"}).text("No saved presets."));
+        return;
+    }
+    var current_key = streams.slice().sort().join("/");
+    presets.forEach(function(preset) {
+        var is_current = preset.streams.slice().sort().join("/") === current_key;
+        var item = $("<div>", {"class": "current_stream preset_item"}).toggleClass("is_active", is_current);
+        item.append($("<span>", {
+            "class": "current_stream_name",
+            title: preset.streams.join(", "),
+            text: preset.name + " (" + preset.streams.length + ")"
+        }).click(function() {
+            load_preset(preset.streams);
+        }));
+        item.append($("<button>", {
+            type: "button",
+            "class": "remove_stream",
+            "aria-label": "Delete preset " + preset.name,
+            title: "Delete preset",
+            text: "×"
+        }).click(function() {
+            remove_preset(preset.name);
+        }));
+        list.append(item);
+    });
 }
 
 // Resolve a stream's target {muted, volume}. A Shift-click stream uses its own
@@ -1780,6 +1897,7 @@ function add_stream(name) {
     update_url();
     optimize_size(streams.length);
     render_followed_channels();
+    render_presets();
     load_current_stream_metadata();
     auto_check_stream_together([name]);
     return true;

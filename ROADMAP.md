@@ -47,11 +47,12 @@ Currently only `T` (theater) and `Esc`. Add:
 
 ## Backlog (nice-to-have)
 
-- Saved channel presets — named groups loaded with one click.
-- Go-live desktop notifications for followed channels.
-- Touch support — tap-to-reveal overlays and controls (they are hover-only today,
-  so titles and pause are unreachable on touch devices).
-- Per-tile "jump to live edge" resync to correct multi-stream drift.
+- [x] Saved channel presets — named lineups in localStorage, loaded in place
+  (reconciled, no reload).
+- [ ] Go-live desktop notifications for followed channels.
+- [ ] Touch support — tap-to-reveal overlays and controls (they are hover-only
+  today, so titles and pause are unreachable on touch devices).
+- [ ] Per-tile "jump to live edge" resync to correct multi-stream drift.
 
 ## Bugs
 
