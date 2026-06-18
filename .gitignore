@@ -1,2 +1,9 @@
 *.pyc
 multitwitch.egg-info
+.venv/
+.claude/
+local-server.*.log
+data/
+delete_me_after.txt
+*.env
+!*.env.example

@@ -13,6 +13,7 @@ requires = [
     'transaction',
     'pyramid_tm',
     'pyramid_debugtoolbar',
+    'streamlink',
     'waitress',
     ]
 
