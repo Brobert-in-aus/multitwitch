@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "57";
+var APP_VERSION = "58";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -2069,8 +2069,35 @@ function initialize_twitch() {
 }
 
 function connect_twitch() {
-    window.location.href = "/auth/twitch/start?" + $.param({
-        return_to: window.location.pathname + window.location.search
+    ensure_twitch_auth_listener();
+    var return_to = window.location.pathname + window.location.search;
+    // Authenticate in a popup so the main page -- and every loaded stream --
+    // stays put. The callback closes the popup and posts back to us; we just
+    // re-check the session. Fall back to a full-page redirect if blocked.
+    var width = 520;
+    var height = 720;
+    var left = window.screenX + Math.max(0, (window.outerWidth - width) / 2);
+    var top = window.screenY + Math.max(0, (window.outerHeight - height) / 2);
+    var popup = window.open(
+        "/auth/twitch/start?" + $.param({popup: 1, return_to: return_to}),
+        "twitch_oauth",
+        "width=" + width + ",height=" + height + ",left=" + left + ",top=" + top
+    );
+    if (!popup) {
+        window.location.href = "/auth/twitch/start?" + $.param({return_to: return_to});
+    }
+}
+
+var twitch_auth_listener_ready = false;
+function ensure_twitch_auth_listener() {
+    if (twitch_auth_listener_ready) {
+        return;
+    }
+    twitch_auth_listener_ready = true;
+    window.addEventListener("message", function(event) {
+        if (event.origin === window.location.origin && event.data === "multitwitch-twitch-auth") {
+            initialize_twitch();
+        }
     });
 }
 

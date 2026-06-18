@@ -77,4 +77,5 @@ Currently only `T` (theater) and `Esc`. Add:
 - [ ] 3. Per-stream audio / independent volume
 - [x] 4. Expanded keyboard shortcuts — 1-9 audio select, F fullscreen, P PiP,
   M mute
-- [ ] Bug: Connect full-page reload (popup OAuth)
+- [x] Bug: Connect full-page reload — OAuth now runs in a popup (server half in
+  twitch.py, committed with the backend)
