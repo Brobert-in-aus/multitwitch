@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "55";
+var APP_VERSION = "56";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -14,6 +14,7 @@ var stream_drag_name = null;
 var stream_drag_pointer = null;
 var stream_drag_target_name = null;
 var active_stream = null;
+var hovered_stream = null;  // tile under the cursor, target for fullscreen / PiP
 var layout_mode = "grid";
 var theater_mode = false;
 // Main-size slider positions by layout. Grid and 2-wide are fixed displays.
@@ -1843,6 +1844,18 @@ function show_theater_hint() {
 }
 
 function initialize_keyboard() {
+    // Track the tile under the cursor so fullscreen / picture-in-picture act on
+    // the stream you're looking at, not just the audio source. Delegated so it
+    // covers tiles added after load.
+    $("#streams")
+        .on("mouseenter.shortcut", ".stream", function() {
+            hovered_stream = $(this).attr("data-stream");
+        })
+        .on("mouseleave.shortcut", ".stream", function() {
+            if (hovered_stream === $(this).attr("data-stream")) {
+                hovered_stream = null;
+            }
+        });
     $(document).on("keydown", function(e) {
         var key = e.key || "";
         var in_field = $(e.target).is("input, textarea, select");
@@ -1852,13 +1865,81 @@ function initialize_keyboard() {
             }
             return;
         }
-        if (in_field) {
+        // Don't hijack typing, or browser/OS chords (Ctrl/Alt/Meta).
+        if (in_field || e.ctrlKey || e.altKey || e.metaKey) {
+            return;
+        }
+        if (key >= "1" && key <= "9") {
+            var index = parseInt(key, 10) - 1;
+            if (index < streams.length) {
+                set_active_stream(streams[index]);
+            }
             return;
         }
         if (key === "t" || key === "T") {
             toggle_theater_mode();
+            return;
+        }
+        if (key === "f" || key === "F") {
+            toggle_tile_fullscreen(target_shortcut_stream());
+            return;
+        }
+        if (key === "p" || key === "P") {
+            toggle_tile_pip(target_shortcut_stream());
+            return;
+        }
+        if (key === "m" || key === "M") {
+            toggle_master_mute();
+            return;
         }
     });
+}
+
+// Fullscreen / PiP act on the hovered tile when there is one, otherwise the
+// active audio stream -- so the shortcuts work both with and without a mouse.
+function target_shortcut_stream() {
+    if (hovered_stream && streams.indexOf(hovered_stream) != -1) {
+        return hovered_stream;
+    }
+    return active_stream;
+}
+
+function toggle_tile_fullscreen(name) {
+    if (document.fullscreenElement) {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        }
+        return;
+    }
+    if (!name) {
+        return;
+    }
+    var tile = stream_tile_by_name(name).get(0);
+    if (tile && tile.requestFullscreen) {
+        var promise = tile.requestFullscreen();
+        if (promise && promise.catch) {
+            promise.catch(function() {});
+        }
+    }
+}
+
+function toggle_tile_pip(name) {
+    if (document.pictureInPictureElement) {
+        if (document.exitPictureInPicture) {
+            document.exitPictureInPicture().catch(function() {});
+        }
+        return;
+    }
+    if (!name) {
+        return;
+    }
+    var player = stream_players[name];
+    if (player && player.video && player.video.requestPictureInPicture) {
+        var promise = player.video.requestPictureInPicture();
+        if (promise && promise.catch) {
+            promise.catch(function() {});
+        }
+    }
 }
 
 function initialize_twitch() {

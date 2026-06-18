@@ -68,6 +68,14 @@ iframe {
     z-index: 5;
 }
 
+/* Fullscreen a single tile (F shortcut): fill the screen regardless of the
+   inline grid dimensions jQuery set on it. !important beats those inline styles. */
+.stream:fullscreen {
+    background: #000;
+    height: 100% !important;
+    width: 100% !important;
+}
+
 .stream.is_active {
     border-color: #0b3552;
     transition: border-color 0.4s ease;
