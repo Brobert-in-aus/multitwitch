@@ -1,4 +1,4 @@
-{% set asset_version = 60 %}
+{% set asset_version = 61 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -166,6 +166,7 @@ $(window).resize(function() {
         <div class="stream_player"></div>
         <div class="stream_hitbox" role="button" tabindex="0" aria-label="Make {{ stream|e }} the active audio stream"></div>
         <button type="button" class="stream_playback_button" aria-label="Pause {{ stream|e }}" title="Pause" onclick="toggle_stream_playback('{{ stream|e }}', event)">&#10074;&#10074;</button>
+        <button type="button" class="stream_live_button" aria-label="Jump to live edge for {{ stream|e }}" title="Jump to live" onclick="sync_to_live('{{ stream|e }}', event)">&#10227;</button>
         <div class="stream_overlay stream_title">{{ stream|e }}</div>
         <div class="stream_overlay stream_channel">{{ stream|e }}</div>
         <div class="stream_overlay stream_game"></div>

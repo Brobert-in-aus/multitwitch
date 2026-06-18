@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "60";
+var APP_VERSION = "61";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -636,6 +636,14 @@ function stream_object(name) {
         text: "\u275A\u275A"
     }).on("click", function(event) {
         toggle_stream_playback(name, event);
+    })).append($("<button>", {
+        type: "button",
+        "class": "stream_live_button",
+        "aria-label": "Jump to live edge for " + name,
+        title: "Jump to live",
+        text: "⟳"
+    }).on("click", function(event) {
+        sync_to_live(name, event);
     })).append($("<div>", {
         "class": "stream_overlay stream_title",
         text: name
@@ -1549,6 +1557,37 @@ function schedule_stream_recovery(name) {
         current.recovering = false;
         reload_stream_playback(name);
     }, delay);
+}
+
+// Jump a drifted stream back to the live edge. Live multi-streams buffer at
+// different points; this snaps to the seekable end (and nudges hls.js to
+// resume loading) so the user can re-sync a tile that's fallen behind.
+function sync_to_live(name, event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    var player = stream_players[name];
+    if (!player || !player.video) {
+        load_direct_stream(stream_tile_by_name(name), name, true);
+        return;
+    }
+    var video = player.video;
+    player.manual_paused = false;
+    player.recovering = false;
+    try {
+        if (player.hls && typeof player.hls.startLoad === "function") {
+            player.hls.startLoad(-1);
+        }
+        if (video.seekable && video.seekable.length) {
+            var live_edge = video.seekable.end(video.seekable.length - 1);
+            if (live_edge - (video.currentTime || 0) > 0.5) {
+                video.currentTime = Math.max(0, live_edge - 0.5);
+            }
+        }
+    } catch (e) {}
+    safe_play(video);
+    update_stream_playback_state(name);
 }
 
 function toggle_stream_playback(name, event) {
