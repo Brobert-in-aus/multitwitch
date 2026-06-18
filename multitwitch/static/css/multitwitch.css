@@ -1,8 +1,9 @@
 body {
-    background: black;
-    font: 13px arial, sans-serif;
+    background: #080a0d;
+    font: 13px Arial, sans-serif;
     margin: 8px;
-    color: white;
+    color: #f7f7f8;
+    overflow: hidden;
 }
 
 a {
@@ -16,10 +17,13 @@ a:hover {
 }
 
 #streams {
+    align-content: flex-start;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
     text-align: center;
     float: left;
     margin: 0;
-    margin-right: -100px;
     padding: 0;
 }
 
@@ -27,36 +31,764 @@ iframe {
     border:0 none;
 }
 
+.stream {
+    background: #030507;
+    border: 2px solid transparent;
+    box-sizing: border-box;
+    cursor: pointer;
+    overflow: hidden;
+    position: relative;
+}
+
+.stream_player,
+.direct_player {
+    height: 100%;
+    width: 100%;
+}
+
+.direct_player {
+    display: block;
+}
+
+.direct_player {
+    background: #000;
+    object-fit: contain;
+}
+
+.stream_status {
+    background: rgba(4, 8, 13, 0.88);
+    color: #f7f7f8;
+    font-size: 12px;
+    left: 50%;
+    max-width: calc(100% - 32px);
+    padding: 6px 8px;
+    position: absolute;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 5;
+}
+
+.stream.is_active {
+    border-color: #0b3552;
+    transition: border-color 0.4s ease;
+}
+
+.stream.is_active.active_fresh,
+.stream.is_active:hover {
+    border-color: #22d3ee;
+}
+
+.stream_overlay {
+    background: rgba(4, 8, 13, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #f7f7f8;
+    display: none;
+    font-size: 12px;
+    max-width: calc(100% - 16px);
+    overflow: hidden;
+    padding: 3px 6px;
+    pointer-events: none;
+    position: absolute;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    z-index: 3;
+}
+
+.stream_title {
+    left: 8px;
+    right: 8px;
+    text-align: left;
+    top: 8px;
+}
+
+.stream_game {
+    bottom: 8px;
+    right: 8px;
+    text-align: right;
+}
+
+.stream_channel {
+    bottom: 8px;
+    left: 8px;
+    text-align: left;
+}
+
+.stream_game:empty {
+    display: none !important;
+}
+
+.stream_hitbox {
+    background: transparent;
+    border: 0;
+    cursor: grab;
+    display: block;
+    inset: 0;
+    padding: 0;
+    position: absolute;
+    z-index: 2;
+}
+
+.stream_hitbox:active {
+    cursor: grabbing;
+}
+
+.stream_playback_button {
+    align-items: center;
+    background: rgba(4, 8, 13, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    color: #f7f7f8;
+    cursor: pointer;
+    display: none;
+    font: inherit;
+    height: 30px;
+    justify-content: center;
+    padding: 0;
+    position: absolute;
+    right: 8px;
+    top: 8px;
+    width: 30px;
+    z-index: 4;
+}
+
+.stream:hover .stream_playback_button,
+.stream.is_paused .stream_playback_button,
+.stream_playback_button:focus-visible {
+    display: flex;
+}
+
+.stream:hover .stream_title,
+.stream.is_paused .stream_title {
+    right: 46px;
+}
+
+.stream_playback_button:hover {
+    background: #263142;
+    border-color: #22d3ee;
+}
+
+.stream:hover .stream_overlay {
+    display: block;
+}
+
+.stream:not(.is_active):hover .stream_overlay {
+    border-color: #22d3ee;
+}
+
+.ui-sortable-helper {
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
+}
+
+.ui-sortable-placeholder {
+    background: rgba(34, 211, 238, 0.14);
+    border: 1px dashed #22d3ee;
+    visibility: visible !important;
+}
+
 #chatbox {
     float: right;
-    width: 320px;
+    width: 340px;
     height: 100%;
     margin: 0px;
     margin-left: -100px;
     padding: 0;
+    position: relative;
+}
+
+#chat_resize_handle {
+    bottom: 0;
+    cursor: ew-resize;
+    left: -5px;
+    position: absolute;
+    top: 0;
+    width: 10px;
+    z-index: 20;
+}
+
+#chat_resize_handle:hover,
+body.chat_resizing #chat_resize_handle {
+    background: rgba(34, 211, 238, 0.16);
+}
+
+body.chat_resizing {
+    cursor: ew-resize;
+    user-select: none;
+}
+
+body.chat_resizing #chatbox::after {
+    content: "";
+    cursor: ew-resize;
+    inset: 0;
+    position: absolute;
+    z-index: 19;
+}
+
+body.chat_resizing #chatbox iframe {
+    pointer-events: none;
+}
+
+#wrapper {
+    display: flex;
+    gap: 10px;
+    min-height: calc(100vh - 16px);
+}
+
+#watch_area {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+}
+
+.layout-focus-one #streams,
+.layout-focus-two #streams,
+.layout-focus-two-vertical #streams {
+    align-content: flex-start;
+    flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+/* Zero-height full-width break: forces the smaller tiles below the mains. */
+#focus_break {
+    flex: 0 0 100%;
+    width: 100%;
+    height: 0;
+    margin: 0;
+    padding: 0;
+}
+
+#control_panel {
+    background: #11151b;
+    border: 1px solid #242a33;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    /* Scales with viewport: slimmer on narrow widths (e.g. vertical browser
+       tabs), capped so it never hogs space on an ultrawide. */
+    flex: 0 0 clamp(208px, 19vw, 300px);
+    max-height: calc(100vh - 16px);
+    overflow: auto;
+    padding: 14px;
+}
+
+@media (max-width: 1100px) {
+    #control_panel {
+        flex-basis: 200px;
+        padding: 10px;
+    }
+}
+
+#brand_block {
+    border-bottom: 1px solid #242a33;
+    margin-bottom: 12px;
+    padding-bottom: 12px;
+}
+
+#brand_name {
+    font-size: 20px;
+    font-weight: bold;
+}
+
+#app_version {
+    color: #98a2b3;
+    font-size: 11px;
+    font-weight: normal;
+    vertical-align: middle;
+}
+
+#brand_status {
+    color: #98a2b3;
+    font-size: 11px;
+    margin-top: 3px;
+    text-transform: uppercase;
+}
+
+.panel_section {
+    border-bottom: 1px solid #242a33;
+    padding: 12px 0;
+}
+
+.section_header {
+    align-items: center;
+    color: #d9e2ef;
+    display: flex;
+    font-size: 11px;
+    font-weight: bold;
+    justify-content: space-between;
+    letter-spacing: 0;
+    margin-bottom: 8px;
+    text-transform: uppercase;
+}
+
+.collapsible_header {
+    background: transparent;
+    border: 0;
+    cursor: pointer;
+    font-family: inherit;
+    padding: 0;
+    text-align: left;
+    width: 100%;
+}
+
+.collapsible_header:hover,
+.collapsible_header:focus-visible {
+    color: #ffffff;
+}
+
+.disclosure_chevron {
+    font-size: 18px;
+    font-weight: normal;
+    line-height: 11px;
+}
+
+#stream_together_panel.is_collapsed .section_header {
+    margin-bottom: 0;
+}
+
+#twitch_auth_state,
+#stream_count {
+    background: #202733;
+    border: 1px solid #344054;
+    font-size: 11px;
+    padding: 2px 6px;
+}
+
+/* Stream count is just a number -- neutral. The Twitch badge reflects state. */
+#stream_count {
+    color: #d9e2ef;
+}
+
+#twitch_auth_state {
+    color: #98a2b3;
+}
+
+#twitch_auth_state.state-connected {
+    color: #a7f3d0;
+    border-color: #2f6b4f;
+}
+
+#twitch_auth_state.state-setup {
+    color: #fbbf24;
+    border-color: #7c5e1a;
+}
+
+#twitch_auth_state.state-error {
+    color: #fca5a5;
+    border-color: #7f2a2a;
+}
+
+.panel_button,
+.mini_button,
+.follow_item,
+.current_stream button {
+    background: #1b222d;
+    border: 1px solid #344054;
+    color: #f7f7f8;
+    cursor: pointer;
+    font: inherit;
+}
+
+.panel_button {
+    box-sizing: border-box;
+    margin-top: 6px;
+    padding: 7px 9px;
+    text-align: left;
+    width: 100%;
+}
+
+.panel_button.icon_button {
+    align-items: center;
+    display: inline-grid;
+    justify-content: center;
+    line-height: 1;
+    text-align: center;
+}
+
+.panel_button:hover,
+.mini_button:hover,
+.follow_item:hover,
+.current_stream button:hover {
+    background: #263142;
+}
+
+.panel_button.primary {
+    background: #0e7490;
+    border-color: #22d3ee;
+}
+
+.panel_button:disabled {
+    background: #111827;
+    border-color: #263142;
+    color: #667085;
+    cursor: default;
+}
+
+.button_row {
+    display: grid;
+    gap: 6px;
+    grid-template-columns: 1fr 1fr;
+}
+
+.slider_row {
+    margin: 8px 0 4px;
+}
+
+.slider_row.inactive {
+    opacity: 0.4;
+}
+
+.slider_label {
+    color: #98a2b3;
+    display: flex;
+    font-size: 11px;
+    justify-content: space-between;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+}
+
+#main_size_value,
+#volume_value {
+    color: #d9e2ef;
+}
+
+#main_size_slider,
+#volume_slider {
+    width: 100%;
+    accent-color: #22d3ee;
+    cursor: pointer;
+}
+
+.volume_control_row {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+}
+
+/* Muted: dim the track so the slider position doesn't read as "playing at 70%". */
+.slider_row.is_muted #volume_slider {
+    opacity: 0.5;
+}
+
+.volume_control_row #volume_slider {
+    flex: 1;
+    min-width: 0;
+}
+
+.volume_control_row #mute_button {
+    flex: 0 0 34px;
+    font-size: 16px;
+    height: 32px;
+    margin-top: 0;
+    padding: 0;
+    width: 34px;
+}
+
+#twitch_account_hint,
+#stream_together_hint,
+.empty_state {
+    color: #98a2b3;
+    line-height: 1.35;
+    margin-bottom: 8px;
+}
+
+#follow_filter {
+    background: #07090c;
+    border: 1px solid #344054;
+    box-sizing: border-box;
+    color: #f7f7f8;
+    margin: 8px 0;
+    padding: 7px 8px;
+    width: 100%;
+}
+
+#followed_channels {
+    display: grid;
+    gap: 5px;
+    max-height: 280px;
+    overflow: auto;
+}
+
+.follow_item,
+.current_stream {
+    align-items: center;
+    display: flex;
+    gap: 8px;
+    justify-content: space-between;
+    min-width: 0;
+    padding: 7px 8px;
+    text-align: left;
+}
+
+.follow_item.is_live {
+    border-color: #ef4444;
+}
+
+/* Already in the current lineup -- greyed out, can't be re-added. */
+.follow_item.in_lineup {
+    border-color: #242a33;
+    cursor: default;
+    opacity: 0.4;
+}
+
+.follow_name,
+.current_stream span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.follow_meta {
+    color: #98a2b3;
+    font-size: 11px;
+}
+
+.follow_item.is_live .follow_meta {
+    color: #fca5a5;
+}
+
+#current_streams,
+#stream_together_actions,
+#stream_together_results {
+    display: grid;
+    gap: 5px;
+    margin-bottom: 8px;
+}
+
+#stream_together_results:empty {
+    margin-bottom: 0;
+}
+
+.current_stream {
+    background: #0b0f14;
+    border: 1px solid #242a33;
+}
+
+.current_stream.is_active {
+    border-color: #22d3ee;
+}
+
+.mini_button {
+    padding: 4px 6px;
+}
+
+.current_stream_name {
+    cursor: pointer;
+    flex: 1;
+    min-width: 0;
+}
+
+.remove_stream {
+    background: transparent;
+    border: 1px solid transparent;
+    color: #98a2b3;
+    cursor: pointer;
+    flex: 0 0 auto;
+    font-size: 15px;
+    line-height: 1;
+    padding: 2px 7px;
+}
+
+.remove_stream:hover {
+    border-color: #ef4444;
+    color: #fca5a5;
+}
+
+.add_stream_row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+}
+
+#add_stream_input {
+    background: #07090c;
+    border: 1px solid #344054;
+    box-sizing: border-box;
+    color: #f7f7f8;
+    flex: 1;
+    min-width: 0;
+    padding: 7px 8px;
+}
+
+.add_stream_row .panel_button {
+    flex: 0 0 auto;
+    width: auto;
+}
+
+.segmented_control {
+    display: grid;
+    gap: 4px;
+    grid-template-columns: repeat(4, 1fr);
+}
+
+.segmented_control button {
+    background: #1b222d;
+    border: 1px solid #344054;
+    color: #f7f7f8;
+    cursor: pointer;
+    font: inherit;
+    padding: 6px 4px;
+}
+
+.segmented_control button.is_selected {
+    background: #0e7490;
+    border-color: #22d3ee;
+}
+
+.option_toggle {
+    align-items: center;
+    color: #cbd5e1;
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+#theater_controls {
+    display: none;
+}
+
+#theater_hint {
+    background: rgba(4, 8, 13, 0.92);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    color: #f7f7f8;
+    display: none;
+    font-size: 13px;
+    left: 50%;
+    padding: 8px 12px;
+    position: fixed;
+    top: 14px;
+    transform: translateX(-50%);
+    z-index: 60;
+}
+
+body.theater_mode #theater_hint.is_visible {
+    display: block;
+}
+
+body.theater_mode #theater_controls {
+    display: flex;
+    gap: 6px;
+    position: fixed;
+    right: 14px;
+    top: 14px;
+    z-index: 50;
+}
+
+.theater_button {
+    background: rgba(4, 8, 13, 0.82);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #e5e7eb;
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0.45;
+    padding: 5px 10px;
+    transition: opacity 0.15s ease;
+}
+
+#theater_controls:hover .theater_button {
+    opacity: 1;
+}
+
+.theater_button:hover {
+    border-color: #22d3ee;
+    color: #ffffff;
+    opacity: 1;
+}
+
+.theater_button.is_selected {
+    border-color: #22d3ee;
+    color: #ffffff;
+}
+
+body.theater_mode {
+    margin: 0;
+}
+
+body.theater_mode #control_panel,
+body.theater_mode #helpbox {
+    display: none !important;
+}
+
+body.theater_mode #wrapper {
+    min-height: 100vh;
+}
+
+body.theater_mode #watch_area {
+    min-height: 100vh;
+}
+
+body.theater_mode:not(.theater_with_chat) #chatbox {
+    display: none !important;
+}
+
+body.theater_mode.theater_with_chat #chatbox {
+    max-width: none;
+}
+
+body.theater_mode.theater_with_chat .stream_chat {
+    font-size: 13px;
+}
+
+#chatbox.ui-widget-content,
+#chatbox .ui-widget-header {
+    background: #11151b;
+    border-color: #242a33;
+    color: #f7f7f8;
+}
+
+#chatbox .ui-tabs-nav {
+    background: #11151b;
+    border: 0;
+    border-bottom: 1px solid #242a33;
+    padding: 4px 4px 0;
+}
+
+#chatbox .ui-tabs-nav li {
+    background: #1b222d;
+    border: 1px solid #344054;
+    border-bottom: 0;
+    margin-right: 4px;
+}
+
+#chatbox .ui-tabs-nav li a {
+    color: #cbd5e1;
+    padding: 6px 8px;
+}
+
+#chatbox .ui-tabs-nav li.ui-tabs-active {
+    background: #0e7490;
+    border-color: #22d3ee;
+}
+
+#chatbox .ui-tabs-nav li.ui-tabs-active a {
+    color: #ffffff;
 }
 
 .stream_chat {
+    font-size: 13px;
     padding: 0;
 }
 
 #helpbox {
-    text-align: justify;
-    display: none;
-    width: 600px;
-    margin: 0 auto;
-    border: 2px solid white;
+    background: #11151b;
+    border: 1px solid #344054;
     border-radius: 10px;
-    -moz-border-radius: 10px;
-    -webkit-border-radius: 10px;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+    display: none;
+    margin: 0 auto;
+    max-width: calc(100vw - 32px);
+    padding: 22px 26px 28px;
+    text-align: left;
+    width: 600px;
 }
 
 #helpbox h1 {
+    margin-top: 0;
     text-align: center;
 }
 
 #helpbox a {
-    color: #e76118;
+    color: #22d3ee;
     text-decoration: none;
 }
 
@@ -65,13 +797,34 @@ iframe {
 }
 
 #helptext {
-    margin: 10px;
+    line-height: 1.5;
+    margin: 0;
 }
 
-#credits {
-    text-align: right;
-    font-size: 10px;
-    padding-right: 10px;
+#helptext p {
+    margin: 0 0 12px;
+}
+
+#helptext p:last-child {
+    margin-bottom: 0;
+}
+
+/* Pinned to the viewport corner, but only painted while the splash is up
+   (it's a child of the hidden #helpbox), so it never overlaps the streams. */
+#fork_note {
+    bottom: 10px;
+    color: #667085;
+    font-size: 11px;
+    position: fixed;
+    right: 12px;
+}
+
+#fork_note a {
+    color: #98a2b3;
+}
+
+#fork_note a:hover {
+    color: #22d3ee;
 }
 
 #bottom_right_bar {
@@ -81,43 +834,26 @@ iframe {
     bottom: 12px;
 }
 
-.optionbox {
-    z-index: 5;
-    display: none;
-    background: rgba(0,0,0,0.65);
-    padding: 5px;
-    margin: 0 auto;
-    border: 2px solid white;
-    border-radius: 10px;
-    -moz-border-radius: 10px;
-    -webkit-border-radius: 10px;
-    position: absolute;
-}
 
-#change_streams {
-    width: 127px;
-}
+@media (max-width: 900px) {
+    body {
+        overflow: auto;
+    }
 
-.streamlist_item .stream_name {
-    width: 123px;
-}
+    #wrapper {
+        display: block;
+    }
 
-.fullwidth {
-    width: 100%;
-}
+    #control_panel {
+        max-height: none;
+        width: 100%;
+    }
 
-.left {
-    float: left;
-}
+    #watch_area {
+        min-height: 70vh;
+    }
 
-.right {
-    float: right;
-}
-
-.centering {
-    text-align: center;
-}
-
-.clear {
-    clear: both;
+    #chatbox {
+        width: 300px;
+    }
 }

@@ -1,26 +1,20 @@
+{% set asset_version = 53 %}
 <!DOCTYPE HTML>
 <html>
 <head>
 <title>{{ project }}</title>
-<link rel="stylesheet" type="text/css" href="/static/css/multitwitch.css" />
+<link rel="stylesheet" type="text/css" href="/static/css/multitwitch.css?v={{ asset_version }}" />
 <link rel="icon" href="/favicon.ico" />
 <script type="text/javascript" src="/static/js/jquery.js"></script>
 <script type="text/javascript" src="/static/js/jquery-ui/jquery-ui.js"></script>
 <link rel="stylesheet" type="text/css" href="/static/css/jquery-ui.css" />
 <script type="text/javascript" src="/static/js/mustache.js"></script>
-<script type="text/javascript" src="/static/js/multitwitch.js"></script>
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"></script>
+<script type="text/javascript" src="/static/js/multitwitch.js?v={{ asset_version }}"></script>
 <script type="text/javascript">
-  var _gaq = _gaq || [];
-  _gaq.push(['_setAccount', 'UA-36803885-1']);
-  _gaq.push(['_trackPageview']);
+var twitch_parent_query = "{{ twitch_parent_query|e }}";
+var darkmode = {{ darkmode|tojson }};
 
-  (function() {
-    var ga = document.createElement('script'); ga.type = 'text/javascript'; ga.async = true;
-    ga.src = ('https:' == document.location.protocol ? 'https://ssl' : 'http://www') + '.google-analytics.com/ga.js';
-    var s = document.getElementsByTagName('script')[0]; s.parentNode.insertBefore(ga, s);
-  })();
-</script>
-<script type="text/javascript">
 $(document).ready(function() {
     absolute_center($("#helpbox"));
     if ({{ nstreams }} == 0) {
@@ -28,12 +22,23 @@ $(document).ready(function() {
         $("#helpbox").css('display','block');
     }
 
-    {% for stream in streams %}
-    streams.push("{{ stream|e }}");
-    {% endfor %}
+    streams = {{ streams|tojson }};
 
     // Setup tabs
     chat_tabs = $("#chatbox").tabs();
+    initialize_audio_settings();
+    initialize_audio_unlock();
+    initialize_stream_players();
+    initialize_playback_recovery();
+    initialize_stream_sorting();
+    initialize_chat_resizer();
+    initialize_stream_together_panel();
+    initialize_keyboard();
+    set_layout_mode('grid');
+    render_current_streams();
+    render_stream_together_actions();
+    auto_check_stream_together(streams.slice());
+    initialize_twitch();
 
     // Do this after all the jqueryui setup.
     optimize_size({{ nstreams }});
@@ -49,10 +54,109 @@ $(window).resize(function() {
 </head>
 <body>
 <div id="wrapper">
+<aside id="control_panel">
+    <div id="brand_block">
+        <div id="brand_name">MultiTwitch <span id="app_version">v{{ asset_version }}</span></div>
+        <div id="brand_status">Control deck</div>
+    </div>
+
+    <div class="panel_section">
+        <div class="section_header">
+            <span>Streams</span>
+            <span id="stream_count">{{ nstreams }}</span>
+        </div>
+        <div id="current_streams"></div>
+        <div class="add_stream_row">
+            <input type="text" id="add_stream_input" placeholder="Add a channel" autocomplete="off" onkeyup="add_stream_keyup(event)" />
+            <button type="button" class="panel_button primary" onclick="submit_add_stream()">Add</button>
+        </div>
+    </div>
+
+    <div class="panel_section" id="stream_together_panel">
+        <button type="button" class="section_header collapsible_header" id="stream_together_toggle" aria-expanded="true" aria-controls="stream_together_body" onclick="toggle_stream_together_panel()">
+            <span>Stream Together</span>
+            <span class="disclosure_chevron" aria-hidden="true">&#8964;</span>
+        </button>
+        <div id="stream_together_body">
+            <div id="stream_together_hint">Loaded streamers are checked automatically.</div>
+            <div id="stream_together_actions"></div>
+            <div id="stream_together_results"></div>
+        </div>
+    </div>
+
+    <div class="panel_section">
+        <button type="button" class="panel_button" onclick="toggle_chat()">Toggle chat</button>
+        <div class="slider_row">
+            <div class="slider_label">
+                <span>Volume</span>
+                <span id="volume_value">70%</span>
+            </div>
+            <div class="volume_control_row">
+                <input type="range" id="volume_slider" min="0" max="100" value="70" aria-label="Master volume" oninput="set_master_volume(this.value)" />
+                <button type="button" class="panel_button icon_button" id="mute_button" onclick="toggle_master_mute()" aria-label="Unmute" title="Unmute">&#128263;</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="panel_section">
+        <div class="section_header">
+            <span>Layout</span>
+            <span id="layout_state">Grid</span>
+        </div>
+        <div class="segmented_control">
+            <button type="button" onclick="set_layout_mode('grid')" data-layout-button="grid">Grid</button>
+            <button type="button" onclick="set_layout_mode('focus-one')" data-layout-button="focus-one">1 Main</button>
+            <button type="button" onclick="set_layout_mode('focus-two')" data-layout-button="focus-two">2 Wide</button>
+            <button type="button" onclick="set_layout_mode('focus-two-vertical')" data-layout-button="focus-two-vertical">2 Stack</button>
+        </div>
+        <div id="main_size_row" class="slider_row inactive">
+            <div class="slider_label">
+                <span>Main size</span>
+                <span id="main_size_value">70%</span>
+            </div>
+            <input type="range" id="main_size_slider" min="0" max="100" value="70" aria-label="Main stream size" oninput="set_main_size(this.value)" />
+        </div>
+        <button type="button" class="panel_button" onclick="toggle_theater_mode()">Theater mode</button>
+        <label class="option_toggle">
+            <input type="checkbox" id="theater_chat_toggle" checked="checked" onchange="sync_theater_mode()" />
+            <span>Keep chat in theater</span>
+        </label>
+    </div>
+
+    <div class="panel_section">
+        <div class="section_header">
+            <span>Twitch</span>
+            <span id="twitch_auth_state">Offline</span>
+        </div>
+        <div id="twitch_account_hint">Connect Twitch to load followed channels.</div>
+        <div class="button_row">
+            <button type="button" class="panel_button primary" id="twitch_connect_button" onclick="connect_twitch()">Connect</button>
+            <button type="button" class="panel_button" id="twitch_disconnect_button" onclick="disconnect_twitch()">Sign out</button>
+        </div>
+        <button type="button" class="panel_button" onclick="load_followed_channels()">Refresh follows</button>
+        <input type="text" id="follow_filter" placeholder="Filter follows" onkeyup="render_followed_channels()" />
+        <div id="followed_channels"></div>
+    </div>
+
+</aside>
+
+<main id="watch_area">
+<div id="theater_controls">
+    <button type="button" id="theater_chat_button" class="theater_button" aria-pressed="true" onclick="toggle_theater_chat()">Chat</button>
+    <button type="button" class="theater_button" onclick="exit_theater_mode()" title="Exit theater (Esc)">Exit theater</button>
+</div>
+<div id="theater_hint">Press Escape to exit theater mode</div>
 <div id="streams">
     {% for stream in streams %}
 
-    <iframe id="embed_{{ stream|e }}" src="https://player.twitch.tv/?muted=true&channel={{ stream|e }}&parent=multitwitch.tv&parent=www.multitwitch.tv" class="stream" allowfullscreen="true"></iframe>
+    <div id="tile_{{ loop.index0 }}" class="stream" data-stream="{{ stream|e }}">
+        <div class="stream_player"></div>
+        <div class="stream_hitbox" role="button" tabindex="0" aria-label="Make {{ stream|e }} the active audio stream"></div>
+        <button type="button" class="stream_playback_button" aria-label="Pause {{ stream|e }}" title="Pause" onclick="toggle_stream_playback('{{ stream|e }}', event)">&#10074;&#10074;</button>
+        <div class="stream_overlay stream_title">{{ stream|e }}</div>
+        <div class="stream_overlay stream_channel">{{ stream|e }}</div>
+        <div class="stream_overlay stream_game"></div>
+    </div>
 
     {% endfor %}
 </div>
@@ -65,51 +169,22 @@ $(window).resize(function() {
 </ul>
 {% for stream in unique_streams %}
 <div id="chat-{{ stream|e }}" class="stream_chat">
-<iframe frameborder="0" scrolling="no" id="chat-{{ stream|e }}-embed" src="https://twitch.tv/embed/{{ stream|e }}/chat?parent=multitwitch.tv&amp;parent=www.multitwitch.tv{% if darkmode %}&darkpopout{% endif %}" height="100%" width="100%"></iframe>
+<iframe frameborder="0" scrolling="no" id="chat-{{ stream|e }}-embed" src="https://www.twitch.tv/embed/{{ stream|urlencode }}/chat?{{ twitch_parent_query|e }}&darkpopout" height="100%" width="100%"></iframe>
 </div>
 {% endfor %}
+<div id="chat_resize_handle" title="Drag to resize chat"></div>
 </div>
+</main>
 
 
 <div id="helpbox">
-<h1>MultiTwitch.tv</h1>
+<h1>MultiTwitch</h1>
 <div id="helptext">
-Welcome to MultiTwitch! You can use this site to watch any number of <a href="http://twitch.tv/">twitch.tv</a> streams at the same time (as long as your computer can handle it). Simply put the streams you want in the url. For example: <a href="/gunnermaniac3/narcissawright">multitwitch.tv/gunnermaniac3/narcissawright</a>. MultiTwitch will optimize the layout of streams to give you the maximum size on each of the streams, while maintaining aspect ratio. For the curious, the source of this page is available at <a href="https://github.com/bhamrick/multitwitch">github.com/bhamrick/multitwitch</a>. Happy streamwatching!
+<p>A personal control deck for watching several <a href="https://twitch.tv/">Twitch</a> channels in one window. Add channels straight in the URL &mdash; for example <a href="/gamesdonequick/esamarathon">/gamesdonequick/esamarathon</a> &mdash; or use the control deck on the left to add them one at a time.</p>
+<p>Pick a <strong>Grid</strong>, <strong>1 Main</strong>, <strong>2 Wide</strong>, or <strong>2 Stack</strong> layout, click any stream to make it the audio source, set the master volume, and drop into theater mode (press <strong>T</strong>, <strong>Esc</strong> to leave). Twitch chat opens in tabs beside the video.</p>
+<p>Connect your Twitch account to load followed channels with live status, and to auto-discover <strong>Stream Together</strong> collaborators for whoever you&rsquo;re watching.</p>
 </div>
-
-<div id="credits">
-Created by Brian Hamrick
-</div>
-</div>
-
-<div id="change_streams" class="optionbox">
-    <div id="streamlist">
-    {% for stream in streams %}
-    <div class="streamlist_item">
-    <input type="checkbox" checked=true class="check" />
-    <span>{{ stream|e }}</span>
-    </div>
-    {% endfor %}
-    <div class="streamlist_item">
-    <input type="text" class="stream_name" onkeyup="stream_item_keyup(event)" />
-    </div>
-    </div>
-
-    <div class="fullwidth centering">
-        <a onclick="add_stream_item()">Add Stream</a>
-    </div>
-
-    <div class="fullwidth">
-    <button type="button" class="left" onclick="close_change_streams(false)">Cancel</button>
-    <button type="button" class="right" onclick="close_change_streams(true)">Ok</button>
-    <div class="clear"></div>
-    </div>
-</div>
-
-<div id="bottom_right_bar">
-<a onclick="change_streams()">Change Streams</a>
-|
-<a onclick="toggle_chat()">Toggle Chat</a>
+<div id="fork_note">Forked from <a href="https://github.com/bhamrick/multitwitch">bhamrick/multitwitch</a></div>
 </div>
 
 </div>
