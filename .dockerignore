@@ -1,0 +1,11 @@
+.git
+.venv
+*.env
+!*.env.example
+data
+*.pyc
+__pycache__
+multitwitch.egg-info
+local-server.*.log
+*.log
+.github

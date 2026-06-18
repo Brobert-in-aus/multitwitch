@@ -1,0 +1,31 @@
+# Litestream config — replicates the Twitch session SQLite DB to Backblaze B2.
+# Mounted at /app/litestream.yml. The DB path here MUST match TWITCH_SESSION_DB
+# (set to /app/data/multistream.sqlite3 in the Dockerfile and compose env).
+#
+# Intervals are throttled to stay under B2's free Class-C transaction cap, which
+# is SHARED across every stateful tool on the account — see the handbook's
+# templates/litestream.yml. Widen further if more stateful tools are added.
+
+access-key-id: ${LITESTREAM_ACCESS_KEY_ID}
+secret-access-key: ${LITESTREAM_SECRET_ACCESS_KEY}
+endpoint: ${LITESTREAM_ENDPOINT}        # e.g. s3.<region>.backblazeb2.com
+region: ${LITESTREAM_REGION}
+
+levels:
+  - interval: 30m
+  - interval: 3h
+
+l0-retention: 30m
+l0-retention-check-interval: 1h
+
+snapshot:
+  interval: 24h
+
+dbs:
+  - path: /app/data/multistream.sqlite3
+    replica:
+      type: s3
+      bucket: ${LITESTREAM_BUCKET}
+      path: multistream                 # UNIQUE per app
+      sync-interval: 5m
+      retention: 720h

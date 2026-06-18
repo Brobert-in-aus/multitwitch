@@ -1,0 +1,37 @@
+# Independent stack for multistream.robertmckinnon.au (handbook Option B).
+# Lives at /opt/multistream/docker-compose.yml on the VPS. Joins the shared
+# `edge` network so the single Caddy can reverse_proxy multistream:6543.
+# NOTE: no `ports:` — backends are never published to the host.
+
+services:
+  multistream:
+    image: ghcr.io/brobert-in-aus/multitwitch:latest
+    restart: unless-stopped
+    env_file:
+      - path: /etc/multistream.env      # per-tool secrets (mode 600 on the VPS)
+        required: false
+    environment:
+      # Stable, non-secret config (secrets live in /etc/multistream.env):
+      PORT: "6543"
+      TWITCH_SESSION_DB: /app/data/multistream.sqlite3
+      TWITCH_SECURE_COOKIES: "1"        # always behind Caddy TLS
+      TWITCH_REDIRECT_URI: https://multistream.robertmckinnon.au/auth/twitch/callback
+    expose:
+      - "6543"
+    networks:
+      - default                          # tool's own private network
+      - edge                             # shared front-door network Caddy is on
+    volumes:
+      - multistream-data:/app/data       # SQLite session DB (stateful)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  edge:
+    external: true                       # created once: `docker network create edge`
+
+volumes:
+  multistream-data:
