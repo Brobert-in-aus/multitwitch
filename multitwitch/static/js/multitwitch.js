@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "53";
+var APP_VERSION = "55";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -28,6 +28,10 @@ var master_volume = 0.70;
 var master_muted = true;
 var MASTER_VOLUME_STORAGE_KEY = "multitwitch.masterVolume";
 var MASTER_MUTED_STORAGE_KEY = "multitwitch.masterMuted";
+var LAYOUT_MODE_STORAGE_KEY = "multitwitch.layoutMode";
+var MAIN_SIZE_STORAGE_KEY = "multitwitch.mainSizeFractions";
+var ACTIVE_STREAM_STORAGE_KEY = "multitwitch.activeStream";
+var VALID_LAYOUT_MODES = {"grid": 1, "focus-one": 1, "focus-two": 1, "focus-two-vertical": 1};
 // Below this many px of stream area, auto-collapse chat so tiles stay usable.
 var MIN_STREAMS_WIDTH = 420;
 var MIN_REST_HEIGHT = 80;  // keep at least a thin strip for the smaller tiles
@@ -40,6 +44,7 @@ var stream_metadata = {};
 var stream_together_checked = {};
 var stream_together_inflight = {};
 var stream_together_results = {};
+var stream_together_matches_acknowledged = false;
 var chat_width_override = load_saved_chat_width();
 var chat_resizing = false;
 var chat_resize_grab_offset = 0;
@@ -662,7 +667,10 @@ function initialize_stream_players() {
         }
         create_stream_player(tile);
     });
-    active_stream = streams.length ? streams[0] : null;
+    var saved_active = load_saved_active_stream();
+    active_stream = (saved_active && streams.indexOf(saved_active) != -1)
+        ? saved_active
+        : (streams.length ? streams[0] : null);
     sync_active_stream_audio();
 }
 
@@ -730,6 +738,7 @@ function set_active_stream(name) {
         return;
     }
     unlock_audio();
+    save_active_stream(name);
     if (active_stream == name) {
         sync_active_stream_audio();
         mark_active_audio_source();
@@ -786,6 +795,63 @@ function persist_audio_settings() {
     try {
         window.localStorage.setItem(MASTER_VOLUME_STORAGE_KEY, String(master_volume));
         window.localStorage.setItem(MASTER_MUTED_STORAGE_KEY, String(master_muted));
+    } catch (e) {}
+}
+
+// View state (layout mode, per-layout main size, audio source) is persisted to
+// localStorage so a refresh restores the deck instead of snapping back to Grid.
+// Tile order is not stored here -- it already round-trips through the URL.
+function load_saved_layout_mode() {
+    try {
+        var saved = window.localStorage.getItem(LAYOUT_MODE_STORAGE_KEY);
+        if (saved && VALID_LAYOUT_MODES[saved]) {
+            return saved;
+        }
+    } catch (e) {}
+    return "grid";
+}
+
+function save_layout_mode(mode) {
+    try {
+        window.localStorage.setItem(LAYOUT_MODE_STORAGE_KEY, mode);
+    } catch (e) {}
+}
+
+function load_saved_main_size_fractions() {
+    try {
+        var parsed = JSON.parse(window.localStorage.getItem(MAIN_SIZE_STORAGE_KEY) || "null");
+        if (!parsed) {
+            return;
+        }
+        for (var key in main_size_fractions) {
+            if (Object.prototype.hasOwnProperty.call(main_size_fractions, key) &&
+                typeof parsed[key] === "number" && parsed[key] >= 0 && parsed[key] <= 1) {
+                main_size_fractions[key] = parsed[key];
+            }
+        }
+    } catch (e) {}
+}
+
+function save_main_size_fractions() {
+    try {
+        window.localStorage.setItem(MAIN_SIZE_STORAGE_KEY, JSON.stringify(main_size_fractions));
+    } catch (e) {}
+}
+
+function load_saved_active_stream() {
+    try {
+        return window.localStorage.getItem(ACTIVE_STREAM_STORAGE_KEY);
+    } catch (e) {
+        return null;
+    }
+}
+
+function save_active_stream(name) {
+    if (!name) {
+        return;
+    }
+    try {
+        window.localStorage.setItem(ACTIVE_STREAM_STORAGE_KEY, name);
     } catch (e) {}
 }
 
@@ -1566,11 +1632,7 @@ function render_stream_together_actions() {
 }
 
 function initialize_stream_together_panel() {
-    var collapsed = false;
-    try {
-        collapsed = localStorage.getItem("multitwitch_stream_together_collapsed") == "1";
-    } catch (e) {}
-    set_stream_together_collapsed(collapsed);
+    set_stream_together_collapsed(true);
 }
 
 function toggle_stream_together_panel() {
@@ -1582,9 +1644,17 @@ function set_stream_together_collapsed(collapsed) {
     $("#stream_together_body").prop("hidden", collapsed);
     $("#stream_together_toggle").attr("aria-expanded", collapsed ? "false" : "true");
     $("#stream_together_toggle .disclosure_chevron").text(collapsed ? "\u203A" : "\u2304");
-    try {
-        localStorage.setItem("multitwitch_stream_together_collapsed", collapsed ? "1" : "0");
-    } catch (e) {}
+    if (!collapsed) {
+        stream_together_matches_acknowledged = true;
+        $("#stream_together_panel").removeClass("has_matches");
+    }
+}
+
+function should_highlight_stream_together(has_matches) {
+    if (!has_matches) {
+        stream_together_matches_acknowledged = false;
+    }
+    return has_matches && !stream_together_matches_acknowledged;
 }
 
 function render_stream_together_results() {
@@ -1599,6 +1669,10 @@ function render_stream_together_results() {
             matches[source_results[i]] = true;
         }
     }
+    $("#stream_together_panel").toggleClass(
+        "has_matches",
+        should_highlight_stream_together(Object.keys(matches).length > 0)
+    );
     Object.keys(matches).sort().forEach(function(name) {
         var in_lineup = streams.indexOf(name) != -1;
         var item = $("<button>", {type: "button", "class": "follow_item stream_together_item"})
@@ -1677,6 +1751,7 @@ function set_layout_mode(mode) {
     $("[data-layout-button='" + mode + "']").addClass("is_selected").attr("aria-pressed", "true");
     $("#layout_state").text(layout_label(mode));
     sync_main_size_control();
+    save_layout_mode(mode);
     optimize_size(-1);
 }
 
@@ -1722,6 +1797,7 @@ function set_main_size(value) {
     main_size_fraction = Math.min(1, Math.max(0, pct / 100));
     main_size_fractions[layout_mode] = main_size_fraction;
     $("#main_size_value").text(pct + "%");
+    save_main_size_fractions();
     optimize_size(-1);
 }
 

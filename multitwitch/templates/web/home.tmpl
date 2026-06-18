@@ -1,4 +1,4 @@
-{% set asset_version = 53 %}
+{% set asset_version = 55 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -34,7 +34,8 @@ $(document).ready(function() {
     initialize_chat_resizer();
     initialize_stream_together_panel();
     initialize_keyboard();
-    set_layout_mode('grid');
+    load_saved_main_size_fractions();
+    set_layout_mode(load_saved_layout_mode());
     render_current_streams();
     render_stream_together_actions();
     auto_check_stream_together(streams.slice());
@@ -72,12 +73,12 @@ $(window).resize(function() {
         </div>
     </div>
 
-    <div class="panel_section" id="stream_together_panel">
-        <button type="button" class="section_header collapsible_header" id="stream_together_toggle" aria-expanded="true" aria-controls="stream_together_body" onclick="toggle_stream_together_panel()">
+    <div class="panel_section is_collapsed" id="stream_together_panel">
+        <button type="button" class="section_header collapsible_header" id="stream_together_toggle" aria-expanded="false" aria-controls="stream_together_body" onclick="toggle_stream_together_panel()">
             <span>Stream Together</span>
-            <span class="disclosure_chevron" aria-hidden="true">&#8964;</span>
+            <span class="disclosure_chevron" aria-hidden="true">&#8250;</span>
         </button>
-        <div id="stream_together_body">
+        <div id="stream_together_body" hidden>
             <div id="stream_together_hint">Loaded streamers are checked automatically.</div>
             <div id="stream_together_actions"></div>
             <div id="stream_together_results"></div>

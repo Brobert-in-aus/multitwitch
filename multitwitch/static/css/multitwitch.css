@@ -330,6 +330,19 @@ body.chat_resizing #chatbox iframe {
     width: 100%;
 }
 
+#stream_together_panel .collapsible_header {
+    transition: background-color 160ms ease, box-shadow 160ms ease, color 160ms ease;
+}
+
+#stream_together_panel.has_matches .collapsible_header {
+    background: rgba(34, 211, 238, 0.08);
+    box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.7), 0 0 14px rgba(34, 211, 238, 0.38);
+    color: #67e8f9;
+    margin: -7px -8px;
+    padding: 7px 8px;
+    width: calc(100% + 16px);
+}
+
 .collapsible_header:hover,
 .collapsible_header:focus-visible {
     color: #ffffff;
