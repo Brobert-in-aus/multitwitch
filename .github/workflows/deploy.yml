@@ -22,7 +22,11 @@ env:
   STACK_DIR: /opt/multistream        # Option B — independent stack
 
 jobs:
+  quality:
+    uses: ./.github/workflows/test.yml
+
   deploy:
+    needs: quality
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

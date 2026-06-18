@@ -64,6 +64,17 @@ test("best_grid_size returns a usable equal tile grid", () => {
 });
 
 
+test("adaptive quality chooses the smallest rendition covering the tile", () => {
+    const {context} = loadApplication();
+    const qualities = ["audio_only", "360p", "720p60", "720p", "1080p60"];
+
+    assert.equal(context.pick_quality_for_height(qualities, 500), "720p");
+    assert.equal(context.pick_quality_for_height(qualities, 900), "1080p60");
+    assert.equal(context.pick_quality_for_height(qualities, 1400), "1080p60");
+    assert.equal(context.pick_quality_for_height(["audio_only"], 500), "best");
+});
+
+
 test("chat width is clamped without reducing the stream area below its floor", () => {
     const {context} = loadApplication();
 
@@ -91,4 +102,18 @@ test("Stream Together glow is acknowledged until matches disappear", () => {
     assert.equal(context.should_highlight_stream_together(true), false);
     assert.equal(context.should_highlight_stream_together(false), false);
     assert.equal(context.should_highlight_stream_together(true), true);
+});
+
+
+test("live-stream indexing drops channels absent from the latest poll", () => {
+    const {context} = loadApplication();
+
+    const indexed = context.index_live_streams([
+        {user_login: "still_live", title: "Current"},
+        {user_login: "newly_live", title: "New"}
+    ]);
+
+    assert.deepEqual(Object.keys(indexed).sort(), ["newly_live", "still_live"]);
+    assert.equal(indexed.still_live.title, "Current");
+    assert.equal(indexed.now_offline, undefined);
 });

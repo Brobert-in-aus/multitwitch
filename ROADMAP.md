@@ -1,85 +1,26 @@
 # MultiTwitch Roadmap
 
-Planned work for the personal multistream control deck. Items are grouped by
-priority. Decisions captured here reflect deliberate scoping choices — see
-"Out of scope" for things considered and dropped.
+This fork is a personal multistream control deck. The core feature set is now
+implemented; this file tracks remaining verification and maintenance work.
 
-## Planned features
+## Verification before and after deployment
 
-### 1. Adaptive stream quality by rendered pixels
-Pick each stream's Twitch quality automatically from the tile's *actual* pixel
-size rather than always requesting `best`.
+- Verify Twitch OAuth popup login and token refresh through the production URL.
+- Verify go-live desktop notifications across a full offline -> live transition.
+- Test tap-to-reveal controls on a physical touch device.
+- Exercise background-player recovery in current Edge and Chrome releases.
+- Confirm Litestream restore and replication against the production B2 bucket.
 
-- Measure each tile's rendered width/height (× `devicePixelRatio`) and choose the
-  smallest Twitch rendition that still meets or exceeds it.
-- Only re-evaluate **after a tile has not been resized for 10 seconds**, so
-  dragging layouts / the main-size slider doesn't thrash the players.
-- Reload the HLS source for a tile only when its target rendition actually
-  changes.
-- Rationale: if a user drives a 4K monitor we can assume they can handle the
-  load; conversely, small grid tiles should pull cheaper renditions to save CPU
-  and bandwidth.
-- Touch points: the direct-stream endpoint currently hard-codes
-  `quality: "best"` (`load_direct_stream` in `multitwitch.js`); server side must
-  accept and honour a requested quality/height.
+## Maintenance backlog
 
-### 2. Persist view state to localStorage
-Stop throwing away the user's layout on every refresh. Persist:
+- Add browser-level integration tests for controls that do not require Twitch.
+- Expand JavaScript unit coverage around presets, audio mixing, and quality
+  selection as those features evolve.
+- Monitor the unofficial Stream Together GraphQL query for Twitch schema changes.
+- Revisit Chromium background media handling when upstream behavior changes.
 
-- Layout mode (currently hard-reset to `grid` on load).
-- Main-size fraction per layout.
-- Active audio stream (restore only if still in the lineup).
-- "Keep chat in theater" toggle (optional).
+## Deliberately out of scope
 
-Tile order already round-trips through the URL, so it is **not** duplicated here.
-Decision: localStorage, **not** URL encoding.
-
-### 3. Per-stream audio / independent volume
-Move beyond the single active-audio model — allow hearing more than one stream
-at once and/or a per-tile volume, so e.g. game audio and commentary can be mixed.
-
-### 4. Expanded keyboard shortcuts
-Currently only `T` (theater) and `Esc`. Add:
-
-- Number keys `1`–`9` to set the audio source / promote a tile to main.
-- Per-tile fullscreen (Fullscreen API).
-- Picture-in-Picture for the active stream (follows the user to another tab).
-
-## Backlog (nice-to-have)
-
-- [x] Saved channel presets — named lineups in localStorage, loaded in place
-  (reconciled, no reload).
-- [x] Go-live desktop notifications for followed channels — opt-in toggle, polls
-  followed-streams and notifies on newly-live channels. Needs live verification.
-- [x] Touch support — tap-to-reveal overlays and controls (hover:none devices
-  get a tap that surfaces the controls for a few seconds). Needs real-device
-  testing.
-- [x] Per-tile "jump to live edge" resync to correct multi-stream drift.
-
-## Bugs
-
-- **Connect triggers a full-page reload.** `connect_twitch()` navigates the whole
-  page through the OAuth redirect (`auth_start` → Twitch → `auth_callback` →
-  `HTTPFound(return_to)`), reloading every stream just to authenticate. Fix by
-  running OAuth in a popup window: `auth_start`/`auth_callback` gain a popup mode
-  that `postMessage`s the opener and closes, so the main page and its loaded
-  streams stay intact while the user authenticates.
-
-## Out of scope (considered, dropped)
-
-- Surfacing extra Twitch metadata (viewer count, uptime) on tiles — not wanted.
-- "Load all live follows" button — could open 300+ streams at once; too dangerous.
-- Encoding view state in the URL — localStorage is preferred instead.
-
-## Status
-
-- [x] 1. Adaptive stream quality by rendered pixels — picks each stream's
-  rendition from its device-pixel size, 10s after tiles settle
-- [x] 2. Persist view state to localStorage — layout mode, per-layout main size,
-  and audio source restore on refresh
-- [x] 3. Per-stream audio / independent volume — Shift-click adds a stream's
-  audio with its own slider that follows master until dragged
-- [x] 4. Expanded keyboard shortcuts — 1-9 audio select, F fullscreen, P PiP,
-  M mute
-- [x] Bug: Connect full-page reload — OAuth now runs in a popup (server half in
-  twitch.py, committed with the backend)
+- Loading every live followed channel at once.
+- Encoding view state in the URL; localStorage is preferred.
+- Additional tile metadata such as viewer count and uptime.

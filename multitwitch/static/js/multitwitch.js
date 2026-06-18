@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "63";
+var APP_VERSION = "65";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -2518,11 +2518,8 @@ function poll_go_live() {
         return;
     }
     twitch_api("followed-streams", {first: 100}, function(data) {
-        var now_live = {};
         var live = data.data || [];
-        for (var i = 0; i < live.length; i++) {
-            now_live[live[i].user_login] = live[i];
-        }
+        var now_live = index_live_streams(live);
         if (notify_seeded) {
             for (var login in now_live) {
                 if (Object.prototype.hasOwnProperty.call(now_live, login) && !notify_seen_live[login]) {
@@ -2533,7 +2530,9 @@ function poll_go_live() {
             notify_seeded = true;
         }
         notify_seen_live = now_live;
-        // Keep the followed-list live markers fresh off the same data.
+        // Replace, rather than merge, so channels that ended since the previous
+        // poll lose their stale Live marker in the followed list.
+        twitch_live_channels = now_live;
         for (var key in now_live) {
             if (Object.prototype.hasOwnProperty.call(now_live, key)) {
                 twitch_live_channels[key] = now_live[key];
@@ -2542,6 +2541,16 @@ function poll_go_live() {
         }
         render_followed_channels();
     }, function() {});
+}
+
+function index_live_streams(live) {
+    var indexed = {};
+    for (var i = 0; i < (live || []).length; i++) {
+        if (live[i].user_login) {
+            indexed[live[i].user_login] = live[i];
+        }
+    }
+    return indexed;
 }
 
 function show_go_live_notification(stream) {

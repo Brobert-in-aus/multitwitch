@@ -19,15 +19,19 @@ Current features
 Streams and playback:
 
 * Direct HLS playback without the official Twitch video embed.
+* Adaptive stream quality based on each tile's rendered device-pixel height.
 * Add and remove channels without leaving the page; the URL stays in sync.
 * Drag a stream over another tile to swap their positions.
 * Select one stream as the audio source by clicking its video.
+* Shift-click additional streams to mix their audio with independent volume.
 * Master volume and mute controls, persisted in local browser storage. The
   first-run default is 70% and muted.
 * Per-stream pause and resume controls.
+* Per-stream jump-to-live controls for correcting multi-stream drift.
 * Playback recovery when Chromium suspends background video, plus a distinct
   "Stream offline" state when Twitch confirms a failed channel is offline.
 * Hover overlays for stream title, channel name, and game metadata.
+* Touch-friendly tap-to-reveal tile controls.
 
 Layouts:
 
@@ -39,14 +43,18 @@ Layouts:
   beside and below them.
 * Adjustable main-stream sizing where the selected layout supports it. Main
   streams never become smaller than secondary streams.
+* Layout, main sizing, and active audio source persist locally across refreshes.
 * Theater mode with optional chat and an Escape shortcut.
+* Keyboard controls for audio selection, mute, fullscreen, and picture-in-picture.
+* Named lineup presets stored locally and loaded without a page refresh.
 
 Chat and Twitch integration:
 
 * Twitch chat tabs for every loaded channel.
 * Draggable chat width, persisted locally, with a compact theater-mode size.
-* Optional Twitch OAuth connection for followed channels and live metadata.
+* Popup-based Twitch OAuth that leaves playing streams uninterrupted.
 * Filterable followed-channel list with live and already-added states.
+* Optional desktop notifications when followed channels go live.
 * Automatic Stream Together discovery through Twitch's unofficial GraphQL API.
   The panel starts collapsed and glows when collaborators are detected; opening
   it acknowledges and clears the glow. Streams are never added automatically;
@@ -63,7 +71,7 @@ Local development
 Python 3.10 is the production baseline. On Windows PowerShell:
 
     py -3.10 -m venv .venv
-    .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+    .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
     .\.venv\Scripts\python.exe -m pip install -e . --no-deps
     .\.venv\Scripts\pserve.exe development.ini
 
