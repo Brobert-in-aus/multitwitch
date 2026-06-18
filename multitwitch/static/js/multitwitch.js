@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "58";
+var APP_VERSION = "59";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -27,6 +27,11 @@ var active_border_timer = null;
 var audio_unlocked = false;  // browsers block autoplay-with-sound until a gesture
 var master_volume = 0.70;
 var master_muted = true;
+// Per-stream audio added via Shift-click: name -> {on, volume, follows_master}.
+// Each entry defaults to master volume and tracks it until its own slider is
+// dragged. Not persisted; Shift-clicking off deletes the entry, so a later
+// Shift-click on resets it to follow master again. Survives player reloads.
+var stream_audio = {};
 var MASTER_VOLUME_STORAGE_KEY = "multitwitch.masterVolume";
 var MASTER_MUTED_STORAGE_KEY = "multitwitch.masterMuted";
 var LAYOUT_MODE_STORAGE_KEY = "multitwitch.layoutMode";
@@ -583,6 +588,7 @@ function remove_stream(name) {
     delete stream_together_checked[name];
     delete stream_together_results[name];
     delete stream_quality_choice[name];
+    delete stream_audio[name];
     stream_tile_by_name(name).remove();
     $("#chat-" + name).remove();
     $("#tablist a[href='#chat-" + name + "']").closest("li").remove();
@@ -637,7 +643,29 @@ function stream_object(name) {
         text: name
     })).append($("<div>", {
         "class": "stream_overlay stream_game"
-    }));
+    })).append(stream_audio_control(name));
+}
+
+// Per-stream volume control, hidden until the stream is Shift-click unmuted
+// (tile gets .has_audio). Handlers are bound in create_stream_player so the
+// static (template-rendered) tiles get them too.
+function stream_audio_control(name) {
+    return $("<div>", {"class": "stream_audio"})
+        .append($("<button>", {
+            type: "button",
+            "class": "stream_audio_mute",
+            "aria-label": "Mute " + name,
+            title: "Mute this stream",
+            text: "🔊"
+        }))
+        .append($("<input>", {
+            type: "range",
+            "class": "stream_audio_slider",
+            min: 0,
+            max: 100,
+            value: 70,
+            "aria-label": name + " volume"
+        }));
 }
 
 function chat_object(name) {
@@ -685,8 +713,14 @@ function initialize_stream_players() {
 function create_stream_player(tile) {
     var name = tile.attr("data-stream");
     tile.find(".stream_hitbox").off("click.stream keydown.stream")
-        .on("click.stream", function() {
+        .on("click.stream", function(e) {
             if (stream_dragging) {
+                return;
+            }
+            // Shift-click adds/removes this stream's own audio; plain click sets
+            // the single master-controlled audio source.
+            if (e.shiftKey) {
+                toggle_stream_audio(name, e);
                 return;
             }
             set_active_stream(name);
@@ -695,12 +729,24 @@ function create_stream_player(tile) {
             // The hitbox advertises role="button" -- honor Enter/Space activation.
             if (e.key === "Enter" || e.key === " " || e.keyCode === 13 || e.keyCode === 32) {
                 e.preventDefault();
-                set_active_stream(name);
+                if (e.shiftKey) {
+                    toggle_stream_audio(name, e);
+                } else {
+                    set_active_stream(name);
+                }
             }
         });
+    tile.find(".stream_audio_slider").off("input.audio").on("input.audio", function(e) {
+        e.stopPropagation();
+        set_stream_volume(name, this.value);
+    });
+    tile.find(".stream_audio_mute").off("click.audio").on("click.audio", function(e) {
+        toggle_stream_audio(name, e);
+    });
     tile.attr("data-muted", "true");
     tile.find(".stream_player").empty().append(direct_player_element(name));
     update_stream_tile_metadata(tile);
+    update_stream_audio_ui(name);
     load_direct_stream(tile, name);
 }
 
@@ -871,6 +917,24 @@ function unlock_audio() {
     sync_active_stream_audio();
 }
 
+// Resolve a stream's target {muted, volume}. A Shift-click stream uses its own
+// volume (following master until its slider is dragged) and is independent of
+// master mute. Otherwise the single active stream plays at master volume.
+function stream_audio_target(name) {
+    var audio = stream_audio[name];
+    if (audio && audio.on) {
+        var volume = audio.follows_master ? master_volume : audio.volume;
+        return {muted: !audio_unlocked || volume <= 0, volume: volume};
+    }
+    if (name == active_stream) {
+        return {
+            muted: !(audio_unlocked && !master_muted && master_volume > 0),
+            volume: master_volume
+        };
+    }
+    return {muted: true, volume: 0};
+}
+
 function sync_active_stream_audio() {
     if (!active_stream && streams.length) {
         active_stream = streams[0];
@@ -879,23 +943,78 @@ function sync_active_stream_audio() {
         var tile = $(this);
         var name = tile.attr("data-stream");
         var is_active = name == active_stream;
-        // First-run and saved-muted sessions stay muted so video can autoplay.
-        var unmuted = audio_unlocked && is_active && !master_muted && master_volume > 0;
+        var target = stream_audio_target(name);
         tile.toggleClass("is_active", is_active);
         if (!is_active) {
             tile.removeClass("active_fresh");
         }
         if (stream_players[name] && stream_players[name].video) {
             var player = stream_players[name];
-            tile.attr("data-muted", unmuted ? "false" : "true");
+            tile.attr("data-muted", target.muted ? "true" : "false");
             if (player.manual_paused) {
-                player.video.muted = !unmuted;
-                player.video.volume = unmuted ? master_volume : 0.0;
+                player.video.muted = target.muted;
+                player.video.volume = target.muted ? 0.0 : target.volume;
             } else {
-                apply_video_audio(player.video, unmuted);
+                apply_video_audio(player.video, !target.muted, target.volume);
             }
         }
     });
+}
+
+// Shift-click toggle: add the stream's own audio (defaulting to follow master)
+// or remove it. Removing deletes the entry so re-adding resets to follow master.
+function toggle_stream_audio(name, event) {
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    unlock_audio();
+    var audio = stream_audio[name];
+    if (audio && audio.on) {
+        delete stream_audio[name];
+    } else {
+        stream_audio[name] = {on: true, volume: master_volume, follows_master: true};
+    }
+    update_stream_audio_ui(name);
+    sync_active_stream_audio();
+}
+
+function set_stream_volume(name, value) {
+    var audio = stream_audio[name];
+    if (!audio || !audio.on) {
+        return;
+    }
+    var pct = parseInt(value, 10);
+    if (isNaN(pct)) {
+        return;
+    }
+    audio.volume = Math.max(0, Math.min(100, pct)) / 100;
+    audio.follows_master = false;  // a dragged slider stops tracking master
+    update_stream_audio_ui(name);
+    sync_active_stream_audio();
+}
+
+function update_stream_audio_ui(name) {
+    var tile = stream_tile_by_name(name);
+    var audio = stream_audio[name];
+    var on = !!(audio && audio.on);
+    tile.toggleClass("has_audio", on);
+    if (on) {
+        var volume = audio.follows_master ? master_volume : audio.volume;
+        tile.find(".stream_audio_slider").val(Math.round(volume * 100));
+        tile.find(".stream_audio_mute").attr("aria-label", "Mute " + name);
+    }
+}
+
+// When master volume moves, slide along any per-stream controls still following
+// it (the audio itself already reads master_volume in sync_active_stream_audio).
+function propagate_master_volume_to_following() {
+    for (var name in stream_audio) {
+        if (Object.prototype.hasOwnProperty.call(stream_audio, name) &&
+            stream_audio[name].on && stream_audio[name].follows_master) {
+            update_stream_audio_ui(name);
+        }
+    }
 }
 
 function direct_player_element(name) {
@@ -1357,21 +1476,24 @@ function safe_play(video) {
     } catch (e) {}
 }
 
-function apply_video_audio(video, unmuted) {
+function apply_video_audio(video, unmuted, volume) {
+    if (volume === undefined) {
+        volume = master_volume;
+    }
     if (!unmuted) {
         video.muted = true;
         video.volume = 0.0;
         safe_play(video);
         return;
     }
-    video.volume = master_volume;
+    video.volume = volume;
     if (video.paused) {
         video.muted = true;
         try {
             var play_promise = video.play();
             if (play_promise && play_promise.then) {
                 play_promise.then(function() {
-                    video.volume = master_volume;
+                    video.volume = volume;
                     video.muted = false;
                 }).catch(function() {});
             } else {
@@ -1396,6 +1518,7 @@ function set_master_volume(value) {
     update_volume_display();
     update_mute_button();
     persist_audio_settings();
+    propagate_master_volume_to_following();
     sync_active_stream_audio();
 }
 

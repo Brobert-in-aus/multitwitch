@@ -74,7 +74,8 @@ Currently only `T` (theater) and `Esc`. Add:
   rendition from its device-pixel size, 10s after tiles settle
 - [x] 2. Persist view state to localStorage — layout mode, per-layout main size,
   and audio source restore on refresh
-- [ ] 3. Per-stream audio / independent volume
+- [x] 3. Per-stream audio / independent volume — Shift-click adds a stream's
+  audio with its own slider that follows master until dragged
 - [x] 4. Expanded keyboard shortcuts — 1-9 audio select, F fullscreen, P PiP,
   M mute
 - [x] Bug: Connect full-page reload — OAuth now runs in a popup (server half in

@@ -174,6 +174,47 @@ iframe {
     border-color: #22d3ee;
 }
 
+/* Per-stream audio control (Shift-click). Hidden until the stream has its own
+   audio; then pinned bottom-center, above the drag hitbox so it's adjustable. */
+.stream_audio {
+    align-items: center;
+    background: rgba(4, 8, 13, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    bottom: 8px;
+    display: none;
+    gap: 6px;
+    left: 50%;
+    padding: 4px 8px;
+    position: absolute;
+    transform: translateX(-50%);
+    z-index: 4;
+}
+
+.stream.has_audio .stream_audio {
+    display: flex;
+}
+
+.stream.has_audio .stream_channel,
+.stream.has_audio .stream_game {
+    display: none !important;
+}
+
+.stream_audio_mute {
+    background: transparent;
+    border: 0;
+    color: #f7f7f8;
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0;
+}
+
+.stream_audio_slider {
+    accent-color: #22d3ee;
+    cursor: pointer;
+    width: 90px;
+}
+
 .stream:hover .stream_overlay {
     display: block;
 }
