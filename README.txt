@@ -48,8 +48,9 @@ Chat and Twitch integration:
 * Optional Twitch OAuth connection for followed channels and live metadata.
 * Filterable followed-channel list with live and already-added states.
 * Automatic Stream Together discovery through Twitch's unofficial GraphQL API.
-  Collaborators are listed in a collapsible panel and are never added
-  automatically; already-loaded collaborators are marked as added.
+  The panel starts collapsed and glows when collaborators are detected; opening
+  it acknowledges and clears the glow. Streams are never added automatically;
+  already-loaded collaborators are marked as added.
 
 Stream Together depends on an undocumented Twitch endpoint used by twitch.tv.
 It is deliberately treated as a best-effort personal-use feature and may break
