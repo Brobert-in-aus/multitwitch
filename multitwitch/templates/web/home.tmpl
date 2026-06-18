@@ -1,4 +1,4 @@
-{% set asset_version = 62 %}
+{% set asset_version = 63 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -42,6 +42,7 @@ $(document).ready(function() {
     render_stream_together_actions();
     auto_check_stream_together(streams.slice());
     initialize_twitch();
+    initialize_notifications();
 
     // Do this after all the jqueryui setup.
     optimize_size({{ nstreams }});
@@ -148,6 +149,10 @@ $(window).resize(function() {
             <button type="button" class="panel_button" id="twitch_disconnect_button" onclick="disconnect_twitch()">Sign out</button>
         </div>
         <button type="button" class="panel_button" onclick="load_followed_channels()">Refresh follows</button>
+        <label class="option_toggle">
+            <input type="checkbox" id="notify_toggle" onchange="toggle_go_live_notifications()" />
+            <span>Notify when follows go live</span>
+        </label>
         <input type="text" id="follow_filter" placeholder="Filter follows" onkeyup="render_followed_channels()" />
         <div id="followed_channels"></div>
     </div>

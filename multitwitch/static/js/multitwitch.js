@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "62";
+var APP_VERSION = "63";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -2369,6 +2369,9 @@ function initialize_twitch() {
             set_twitch_hint("Connected as " + data.login + ".");
             load_current_stream_metadata();
             load_followed_channels();
+            if (notify_enabled) {
+                start_go_live_polling();
+            }
         },
         error: function() {
             set_twitch_state("Error", "error");
@@ -2422,8 +2425,142 @@ function disconnect_twitch() {
             $("#twitch_disconnect_button").hide();
             set_twitch_state("Offline", "offline");
             set_twitch_hint("Signed out.");
+            stop_go_live_polling();
+            notify_seeded = false;
+            notify_seen_live = {};
         }
     });
+}
+
+// Go-live desktop notifications. Polls followed-streams while enabled and
+// connected; the first poll only seeds the known-live set so we don't fire for
+// channels already live when notifications were turned on.
+var GO_LIVE_NOTIFY_KEY = "multitwitch.notifyGoLive";
+var notify_enabled = false;
+var notify_poll_timer = null;
+var notify_seeded = false;
+var notify_seen_live = {};
+var NOTIFY_POLL_INTERVAL = 120000;
+
+function initialize_notifications() {
+    try {
+        notify_enabled = window.localStorage.getItem(GO_LIVE_NOTIFY_KEY) === "1";
+    } catch (e) {}
+    $("#notify_toggle").prop("checked", notify_enabled);
+    if (notify_enabled && twitch_user) {
+        start_go_live_polling();
+    }
+}
+
+function toggle_go_live_notifications() {
+    var on = $("#notify_toggle").prop("checked");
+    if (!on) {
+        set_notify_enabled(false);
+        return;
+    }
+    if (!window.Notification) {
+        $("#notify_toggle").prop("checked", false);
+        set_twitch_hint("This browser does not support notifications.");
+        return;
+    }
+    if (Notification.permission === "granted") {
+        set_notify_enabled(true);
+        return;
+    }
+    if (Notification.permission === "denied") {
+        $("#notify_toggle").prop("checked", false);
+        set_twitch_hint("Notifications are blocked in your browser settings.");
+        return;
+    }
+    Notification.requestPermission().then(function(permission) {
+        if (permission === "granted") {
+            $("#notify_toggle").prop("checked", true);
+            set_notify_enabled(true);
+        } else {
+            $("#notify_toggle").prop("checked", false);
+            set_notify_enabled(false);
+            set_twitch_hint("Notification permission was not granted.");
+        }
+    });
+}
+
+function set_notify_enabled(on) {
+    notify_enabled = on;
+    try {
+        window.localStorage.setItem(GO_LIVE_NOTIFY_KEY, on ? "1" : "0");
+    } catch (e) {}
+    if (on) {
+        start_go_live_polling();
+    } else {
+        stop_go_live_polling();
+        notify_seeded = false;
+        notify_seen_live = {};
+    }
+}
+
+function start_go_live_polling() {
+    if (notify_poll_timer) {
+        return;
+    }
+    poll_go_live();
+    notify_poll_timer = setInterval(poll_go_live, NOTIFY_POLL_INTERVAL);
+}
+
+function stop_go_live_polling() {
+    if (notify_poll_timer) {
+        clearInterval(notify_poll_timer);
+        notify_poll_timer = null;
+    }
+}
+
+function poll_go_live() {
+    if (!twitch_user || !notify_enabled) {
+        return;
+    }
+    twitch_api("followed-streams", {first: 100}, function(data) {
+        var now_live = {};
+        var live = data.data || [];
+        for (var i = 0; i < live.length; i++) {
+            now_live[live[i].user_login] = live[i];
+        }
+        if (notify_seeded) {
+            for (var login in now_live) {
+                if (Object.prototype.hasOwnProperty.call(now_live, login) && !notify_seen_live[login]) {
+                    show_go_live_notification(now_live[login]);
+                }
+            }
+        } else {
+            notify_seeded = true;
+        }
+        notify_seen_live = now_live;
+        // Keep the followed-list live markers fresh off the same data.
+        for (var key in now_live) {
+            if (Object.prototype.hasOwnProperty.call(now_live, key)) {
+                twitch_live_channels[key] = now_live[key];
+                stream_metadata[key.toLowerCase()] = now_live[key];
+            }
+        }
+        render_followed_channels();
+    }, function() {});
+}
+
+function show_go_live_notification(stream) {
+    if (!window.Notification || Notification.permission !== "granted") {
+        return;
+    }
+    var title = (stream.user_name || stream.user_login) + " is live";
+    var body = stream.title || stream.game_name || "";
+    try {
+        var note = new Notification(title, {
+            body: body,
+            tag: "multitwitch-live-" + stream.user_login
+        });
+        note.onclick = function() {
+            window.focus();
+            add_stream(stream.user_login);
+            note.close();
+        };
+    } catch (e) {}
 }
 
 function twitch_api(path, data, on_success, on_error) {

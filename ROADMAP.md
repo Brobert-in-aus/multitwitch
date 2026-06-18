@@ -49,7 +49,8 @@ Currently only `T` (theater) and `Esc`. Add:
 
 - [x] Saved channel presets — named lineups in localStorage, loaded in place
   (reconciled, no reload).
-- [ ] Go-live desktop notifications for followed channels.
+- [x] Go-live desktop notifications for followed channels — opt-in toggle, polls
+  followed-streams and notifies on newly-live channels. Needs live verification.
 - [x] Touch support — tap-to-reveal overlays and controls (hover:none devices
   get a tap that surfaces the controls for a few seconds). Needs real-device
   testing.
