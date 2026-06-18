@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "61";
+var APP_VERSION = "62";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -32,6 +32,7 @@ var master_muted = true;
 // dragged. Not persisted; Shift-clicking off deletes the entry, so a later
 // Shift-click on resets it to follow master again. Survives player reloads.
 var stream_audio = {};
+var is_touch_device = false;  // no hover -> reveal tile controls on tap instead
 var MASTER_VOLUME_STORAGE_KEY = "multitwitch.masterVolume";
 var MASTER_MUTED_STORAGE_KEY = "multitwitch.masterMuted";
 var LAYOUT_MODE_STORAGE_KEY = "multitwitch.layoutMode";
@@ -733,6 +734,8 @@ function create_stream_player(tile) {
                 return;
             }
             set_active_stream(name);
+            // Touch has no hover, so a tap also surfaces the tile's controls.
+            reveal_tile_controls(tile);
         })
         .on("keydown.stream", function(e) {
             // The hitbox advertises role="button" -- honor Enter/Space activation.
@@ -1567,6 +1570,7 @@ function sync_to_live(name, event) {
         event.preventDefault();
         event.stopPropagation();
     }
+    reveal_tile_controls(stream_tile_by_name(name));
     var player = stream_players[name];
     if (!player || !player.video) {
         load_direct_stream(stream_tile_by_name(name), name, true);
@@ -1595,6 +1599,7 @@ function toggle_stream_playback(name, event) {
         event.preventDefault();
         event.stopPropagation();
     }
+    reveal_tile_controls(stream_tile_by_name(name));
     var player = stream_players[name];
     if (!player) {
         load_direct_stream(stream_tile_by_name(name), name, true);
@@ -2211,6 +2216,30 @@ function show_theater_hint() {
     hint.data("hide_timer", setTimeout(function() {
         hint.removeClass("is_visible");
     }, 3200));
+}
+
+function initialize_touch() {
+    try {
+        is_touch_device = !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
+    } catch (e) {
+        is_touch_device = false;
+    }
+    if (is_touch_device) {
+        $("body").addClass("is_touch");
+    }
+}
+
+// On touch, reveal a tile's hover-only controls for a few seconds. No-op on
+// pointer devices, so it's safe to call from any tile interaction.
+function reveal_tile_controls(tile) {
+    if (!is_touch_device || !tile || !tile.length) {
+        return;
+    }
+    tile.addClass("controls_visible");
+    clearTimeout(tile.data("controls_timer"));
+    tile.data("controls_timer", setTimeout(function() {
+        tile.removeClass("controls_visible");
+    }, 4000));
 }
 
 function initialize_keyboard() {

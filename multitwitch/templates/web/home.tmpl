@@ -1,4 +1,4 @@
-{% set asset_version = 61 %}
+{% set asset_version = 62 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -34,6 +34,7 @@ $(document).ready(function() {
     initialize_chat_resizer();
     initialize_stream_together_panel();
     initialize_keyboard();
+    initialize_touch();
     load_saved_main_size_fractions();
     set_layout_mode(load_saved_layout_mode());
     render_current_streams();

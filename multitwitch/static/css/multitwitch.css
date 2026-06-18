@@ -250,6 +250,21 @@ iframe {
     border-color: #22d3ee;
 }
 
+/* Touch: there's no hover, so tapping a tile adds .controls_visible for a few
+   seconds (managed in JS) to surface the same overlays and buttons. */
+.stream.controls_visible .stream_overlay {
+    display: block;
+}
+
+.stream.controls_visible .stream_playback_button,
+.stream.controls_visible .stream_live_button {
+    display: flex;
+}
+
+.stream.controls_visible .stream_title {
+    right: 84px;
+}
+
 .ui-sortable-helper {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
 }
