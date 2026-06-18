@@ -70,9 +70,11 @@ Currently only `T` (theater) and `Esc`. Add:
 
 ## Status
 
-- [ ] 1. Adaptive stream quality by rendered pixels
+- [x] 1. Adaptive stream quality by rendered pixels — picks each stream's
+  rendition from its device-pixel size, 10s after tiles settle
 - [x] 2. Persist view state to localStorage — layout mode, per-layout main size,
   and audio source restore on refresh
 - [ ] 3. Per-stream audio / independent volume
-- [ ] 4. Expanded keyboard shortcuts
+- [x] 4. Expanded keyboard shortcuts — 1-9 audio select, F fullscreen, P PiP,
+  M mute
 - [ ] Bug: Connect full-page reload (popup OAuth)

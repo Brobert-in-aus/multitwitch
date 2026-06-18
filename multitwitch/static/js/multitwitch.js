@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "56";
+var APP_VERSION = "57";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -38,6 +38,11 @@ var MIN_STREAMS_WIDTH = 420;
 var MIN_REST_HEIGHT = 80;  // keep at least a thin strip for the smaller tiles
 var GRID_GAP = 4;     // must match #streams `gap` in the CSS
 var TILE_CHROME = 4;  // border width jQuery adds on top of the size we set
+var stream_quality_choice = {};  // name -> requested quality label, survives reloads
+var quality_adapt_timer = null;
+// Only re-pick quality once tiles have stopped resizing for this long, so
+// dragging the main-size slider or a window edge doesn't thrash the players.
+var QUALITY_ADAPT_DELAY = 10000;
 var twitch_user = null;
 var followed_channels = [];
 var twitch_live_channels = {};
@@ -149,6 +154,7 @@ function optimize_size(n) {
     render_current_streams();
     render_stream_together_actions();
     render_stream_together_results();
+    schedule_quality_adaptation();
 }
 
 var FOCUS_GAP = GRID_GAP;
@@ -576,6 +582,7 @@ function remove_stream(name) {
     delete stream_together_inflight[name];
     delete stream_together_checked[name];
     delete stream_together_results[name];
+    delete stream_quality_choice[name];
     stream_tile_by_name(name).remove();
     $("#chat-" + name).remove();
     $("#tablist a[href='#chat-" + name + "']").closest("li").remove();
@@ -902,18 +909,101 @@ function direct_player_element(name) {
     });
 }
 
-function load_direct_stream(tile, name, force_refresh) {
+// Parse a Twitch quality label ("720p", "1080p60") into resolution height and
+// frame rate. Non-video renditions ("audio_only") return null and are skipped.
+function quality_metrics(label) {
+    var match = /^(\d+)p(\d+)?$/.exec(label);
+    if (!match) {
+        return null;
+    }
+    return {label: label, height: parseInt(match[1], 10), fps: match[2] ? parseInt(match[2], 10) : 30};
+}
+
+// Smallest rendition that still covers needed_height device-pixels; if none is
+// tall enough, the largest available. Ties on height prefer the lower frame
+// rate (less load) -- the pixel count is what we're matching, not smoothness.
+function pick_quality_for_height(qualities, needed_height) {
+    var video = [];
+    for (var i = 0; i < (qualities || []).length; i++) {
+        var metrics = quality_metrics(qualities[i]);
+        if (metrics) {
+            video.push(metrics);
+        }
+    }
+    if (!video.length) {
+        return "best";
+    }
+    video.sort(function(a, b) {
+        return a.height - b.height || a.fps - b.fps;
+    });
+    for (var j = 0; j < video.length; j++) {
+        if (video[j].height >= needed_height) {
+            return video[j].label;
+        }
+    }
+    return video[video.length - 1].label;
+}
+
+function schedule_quality_adaptation() {
+    if (quality_adapt_timer) {
+        clearTimeout(quality_adapt_timer);
+    }
+    quality_adapt_timer = setTimeout(adapt_stream_qualities, QUALITY_ADAPT_DELAY);
+}
+
+// After tiles settle, match each stream's rendition to the pixels it's actually
+// drawn at (CSS px x devicePixelRatio -- so a 4K display naturally pulls higher
+// quality). Only reloads a tile when its target rendition actually changes.
+function adapt_stream_qualities() {
+    if (!page_active()) {
+        return;
+    }
+    var dpr = window.devicePixelRatio || 1;
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        if (!player || !player.video || !player.qualities || !player.qualities.length) {
+            continue;
+        }
+        if (player.manual_paused || player.recovering) {
+            continue;
+        }
+        var rendered_height = player.video.clientHeight;
+        if (!rendered_height) {
+            continue;
+        }
+        var target = pick_quality_for_height(player.qualities, Math.round(rendered_height * dpr));
+        if (target === "best" || target === player.quality) {
+            continue;
+        }
+        stream_quality_choice[name] = target;
+        load_direct_stream(stream_tile_by_name(name), name, true, target);
+    }
+}
+
+function load_direct_stream(tile, name, force_refresh, quality) {
     var video = tile.find("video.direct_player").get(0);
     if (!video) {
         return;
     }
+    // Reloads (recovery, quality changes) keep the last requested quality so a
+    // recovery doesn't silently revert an adapted stream back to "best".
+    var requested_quality = quality || stream_quality_choice[name] || "best";
     set_player_status(tile, "Loading stream...");
     $.ajax({
         url: "/api/direct-stream/" + encodeURIComponent(name),
-        data: {quality: "best", refresh: force_refresh ? "1" : "0"},
+        data: {quality: requested_quality, refresh: force_refresh ? "1" : "0"},
         timeout: 20000,
         success: function(data) {
             attach_hls_stream(tile, name, video, data.url);
+            if (stream_players[name]) {
+                // What the server actually served (may differ from requested),
+                // plus the menu of available renditions, for the adapter.
+                stream_players[name].quality = data.quality || requested_quality;
+                stream_players[name].qualities = data.qualities || [];
+            }
         },
         error: function(xhr) {
             var message = (xhr.responseJSON && xhr.responseJSON.error) || "Could not load stream.";
