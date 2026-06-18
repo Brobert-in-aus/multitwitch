@@ -703,7 +703,7 @@ body.chat_resizing #chatbox iframe {
     margin-bottom: 6px;
 }
 
-#add_stream_input {
+.add_stream_row input[type="text"] {
     background: #07090c;
     border: 1px solid #344054;
     box-sizing: border-box;
@@ -715,7 +715,7 @@ body.chat_resizing #chatbox iframe {
 
 .add_stream_row .panel_button {
     flex: 0 0 auto;
-    width: auto;
+    width: 56px;
 }
 
 .segmented_control {
