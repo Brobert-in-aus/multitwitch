@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "66";
+var APP_VERSION = "67";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -49,6 +49,14 @@ var quality_adapt_timer = null;
 // Only re-pick quality once tiles have stopped resizing for this long, so
 // dragging the main-size slider or a window edge doesn't thrash the players.
 var QUALITY_ADAPT_DELAY = 10000;
+var LATENCY_SYNC_DELAY_STORAGE_KEY = "multitwitch.latencySyncDelay";
+var LATENCY_SYNC_INTERVAL = 2000;
+var LATENCY_SYNC_HARD_THRESHOLD = 0.75;
+var LATENCY_SYNC_SOFT_THRESHOLD = 0.20;
+var latency_sync_enabled = false;
+var latency_sync_extra_delay = load_saved_latency_sync_delay();
+var latency_sync_base_latency = null;
+var latency_sync_timer = null;
 var twitch_user = null;
 var followed_channels = [];
 var twitch_live_channels = {};
@@ -160,6 +168,7 @@ function optimize_size(n) {
     render_current_streams();
     render_stream_together_actions();
     render_stream_together_results();
+    update_latency_sync_ui();
     schedule_quality_adaptation();
 }
 
@@ -1307,7 +1316,9 @@ function attach_hls_stream(tile, name, video, url) {
         last_progress_at: Date.now(),
         recovery_attempt: 0,
         recovery_timer: null,
-        resume_timer: null
+        resume_timer: null,
+        sync_natural_latency: null,
+        last_sync_seek_at: 0
     };
     $(video).off(".playbackRecovery")
         .on("pause.playbackRecovery", function() {
@@ -1335,6 +1346,9 @@ function attach_hls_stream(tile, name, video, url) {
                     player.stalled = false;
                     set_player_status(tile, "");
                 }
+                if (latency_sync_enabled && player.sync_natural_latency === null) {
+                    setTimeout(run_latency_sync, 250);
+                }
             }
             update_stream_playback_state(name);
         })
@@ -1356,9 +1370,7 @@ function attach_hls_stream(tile, name, video, url) {
             mark_stream_stalled(name, "Reconnecting stream...");
             reload_stream_playback(name);
         });
-    if (video.canPlayType("application/vnd.apple.mpegurl")) {
-        video.src = url;
-    } else if (window.Hls && Hls.isSupported()) {
+    if (window.Hls && Hls.isSupported()) {
         var hls = new Hls({
             liveSyncDurationCount: 3,
             lowLatencyMode: true
@@ -1376,6 +1388,8 @@ function attach_hls_stream(tile, name, video, url) {
         });
         hls.loadSource(url);
         hls.attachMedia(video);
+    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+        video.src = url;
     } else {
         set_player_status(tile, "This browser cannot play HLS streams.");
         return;
@@ -1395,6 +1409,241 @@ function initialize_playback_recovery() {
     });
     $(window).on("focus.playbackRecovery pageshow.playbackRecovery", resume_all_after_inactive);
     setInterval(ensure_all_streams_playing, 5000);
+}
+
+function load_saved_latency_sync_delay() {
+    try {
+        var saved = parseFloat(window.localStorage.getItem(LATENCY_SYNC_DELAY_STORAGE_KEY));
+        return isNaN(saved) ? 0 : clamp_latency_sync_delay(saved);
+    } catch (e) {
+        return 0;
+    }
+}
+
+function clamp_latency_sync_delay(value) {
+    value = parseFloat(value);
+    if (isNaN(value)) {
+        return 0;
+    }
+    return Math.max(0, Math.min(30, Math.round(value)));
+}
+
+function initialize_latency_sync() {
+    latency_sync_extra_delay = load_saved_latency_sync_delay();
+    $("#latency_sync_slider").val(latency_sync_extra_delay);
+    update_latency_sync_ui();
+    if (!latency_sync_timer) {
+        latency_sync_timer = setInterval(run_latency_sync, LATENCY_SYNC_INTERVAL);
+    }
+}
+
+function set_latency_sync_delay(value) {
+    latency_sync_extra_delay = clamp_latency_sync_delay(value);
+    try {
+        window.localStorage.setItem(LATENCY_SYNC_DELAY_STORAGE_KEY, String(latency_sync_extra_delay));
+    } catch (e) {}
+    update_latency_sync_ui();
+    if (latency_sync_enabled) {
+        run_latency_sync();
+    }
+}
+
+function measure_player_latency(player) {
+    if (!player || !player.video) {
+        return null;
+    }
+    if (player.hls && typeof player.hls.latency === "number" && isFinite(player.hls.latency) && player.hls.latency > 0) {
+        return player.hls.latency;
+    }
+    if (player.hls && player.hls.latestLevelDetails) {
+        var details = player.hls.latestLevelDetails;
+        if (details.live && typeof details.edge === "number") {
+            return Math.max(0, details.edge + (details.age || 0) - (player.video.currentTime || 0));
+        }
+    }
+    try {
+        var seekable = player.video.seekable;
+        if (seekable && seekable.length) {
+            return Math.max(0, seekable.end(seekable.length - 1) - (player.video.currentTime || 0));
+        }
+    } catch (e) {}
+    return null;
+}
+
+function player_seek_bounds(player) {
+    try {
+        var seekable = player.video.seekable;
+        if (seekable && seekable.length) {
+            var index = seekable.length - 1;
+            return {start: seekable.start(index), end: seekable.end(index)};
+        }
+    } catch (e) {}
+    if (player.hls && player.hls.latestLevelDetails) {
+        var details = player.hls.latestLevelDetails;
+        if (details.live && typeof details.edge === "number" && typeof details.totalduration === "number") {
+            return {
+                start: Math.max(0, details.edge - details.totalduration),
+                end: details.edge
+            };
+        }
+    }
+    return null;
+}
+
+function calculate_latency_sync_target(players, extra_delay) {
+    var slowest = null;
+    for (var i = 0; i < players.length; i++) {
+        var latency = players[i].natural_latency;
+        if (typeof latency === "number" && isFinite(latency) && (slowest === null || latency > slowest)) {
+            slowest = latency;
+        }
+    }
+    return slowest === null ? null : slowest + clamp_latency_sync_delay(extra_delay);
+}
+
+function latency_sync_correction(latency, target, current_time, seek_start, seek_end) {
+    var error = latency - target;
+    if (Math.abs(error) >= LATENCY_SYNC_HARD_THRESHOLD) {
+        var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + error));
+        return {seek_to: seek_to, playback_rate: 1};
+    }
+    if (Math.abs(error) >= LATENCY_SYNC_SOFT_THRESHOLD) {
+        return {seek_to: null, playback_rate: error > 0 ? 1.03 : 0.97};
+    }
+    return {seek_to: null, playback_rate: 1};
+}
+
+function collect_latency_sync_players() {
+    var measured = [];
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        if (!player || player.manual_paused || !player.video) {
+            continue;
+        }
+        var latency = measure_player_latency(player);
+        if (latency === null) {
+            continue;
+        }
+        if (player.sync_natural_latency === null) {
+            player.sync_natural_latency = latency;
+        }
+        measured.push({name: name, player: player, latency: latency, natural_latency: player.sync_natural_latency});
+    }
+    return measured;
+}
+
+function toggle_latency_sync() {
+    if (latency_sync_enabled) {
+        disable_latency_sync();
+        return;
+    }
+    latency_sync_enabled = true;
+    latency_sync_base_latency = null;
+    for (var name in stream_players) {
+        if (Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            stream_players[name].sync_natural_latency = null;
+        }
+    }
+    update_latency_sync_ui("Measuring");
+    run_latency_sync();
+}
+
+function disable_latency_sync(status) {
+    latency_sync_enabled = false;
+    latency_sync_base_latency = null;
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        player.sync_natural_latency = null;
+        if (player.video) {
+            player.video.playbackRate = 1;
+        }
+    }
+    update_latency_sync_ui(status);
+}
+
+function run_latency_sync() {
+    if (!latency_sync_enabled || !page_active()) {
+        return;
+    }
+    if (streams.length < 2) {
+        disable_latency_sync("Need 2 streams");
+        return;
+    }
+    var measured = collect_latency_sync_players();
+    if (measured.length < 2) {
+        for (var partial_name in stream_players) {
+            if (Object.prototype.hasOwnProperty.call(stream_players, partial_name) && stream_players[partial_name].video) {
+                stream_players[partial_name].video.playbackRate = 1;
+            }
+        }
+        update_latency_sync_ui("Measuring " + measured.length + "/" + streams.length);
+        return;
+    }
+    if (latency_sync_base_latency === null || measured.length === streams.length) {
+        latency_sync_base_latency = calculate_latency_sync_target(measured, 0);
+    }
+    var target = latency_sync_base_latency + latency_sync_extra_delay;
+    var corrected = 0;
+    var now = Date.now();
+    for (var i = 0; i < measured.length; i++) {
+        var item = measured[i];
+        var video = item.player.video;
+        try {
+            var bounds = player_seek_bounds(item.player);
+            if (!bounds) {
+                continue;
+            }
+            var correction = latency_sync_correction(
+                item.latency,
+                target,
+                video.currentTime || 0,
+                bounds.start,
+                bounds.end
+            );
+            if (correction.seek_to !== null && now - item.player.last_sync_seek_at >= 1500) {
+                video.playbackRate = 1;
+                video.currentTime = correction.seek_to;
+                item.player.last_sync_seek_at = now;
+                corrected += 1;
+            } else {
+                video.playbackRate = correction.playback_rate;
+            }
+            if (!item.player.manual_paused && video.paused) {
+                safe_play(video);
+            }
+        } catch (e) {
+            video.playbackRate = 1;
+        }
+    }
+    var status = target.toFixed(1) + "s target";
+    if (measured.length < streams.length) {
+        status += " · " + measured.length + "/" + streams.length;
+    } else if (corrected) {
+        status += " · Aligning";
+    }
+    update_latency_sync_ui(status);
+}
+
+function update_latency_sync_ui(status) {
+    var enough_streams = streams.length >= 2;
+    var button = $("#latency_sync_button");
+    button.prop("disabled", !enough_streams && !latency_sync_enabled)
+        .toggleClass("primary", latency_sync_enabled)
+        .attr("aria-pressed", latency_sync_enabled ? "true" : "false")
+        .text(latency_sync_enabled ? "Stop sync" : "Sync streams");
+    $("#latency_sync_value").text("+" + latency_sync_extra_delay + "s");
+    if (!status && latency_sync_enabled && latency_sync_base_latency !== null) {
+        status = (latency_sync_base_latency + latency_sync_extra_delay).toFixed(1) + "s target";
+    }
+    $("#latency_sync_state")
+        .toggleClass("state-active", latency_sync_enabled)
+        .text(status || (enough_streams ? "Ready" : "Need 2 streams"));
 }
 
 // Chromium flips document.hidden to true when the window is fully occluded
@@ -1426,6 +1675,9 @@ function resume_all_after_inactive() {
         if (player.video.paused) {
             safe_play(player.video);
         }
+    }
+    if (latency_sync_enabled) {
+        setTimeout(run_latency_sync, 500);
     }
 }
 
@@ -1571,6 +1823,9 @@ function sync_to_live(name, event) {
         event.stopPropagation();
     }
     reveal_tile_controls(stream_tile_by_name(name));
+    if (latency_sync_enabled) {
+        disable_latency_sync("Stopped");
+    }
     var player = stream_players[name];
     if (!player || !player.video) {
         load_direct_stream(stream_tile_by_name(name), name, true);
@@ -1716,6 +1971,9 @@ function destroy_stream_player(name) {
         return;
     }
     try {
+        if (player.video) {
+            player.video.playbackRate = 1;
+        }
         if (player.recovery_timer) {
             clearTimeout(player.recovery_timer);
         }

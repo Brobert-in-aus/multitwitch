@@ -450,7 +450,8 @@ body.chat_resizing #chatbox iframe {
 }
 
 #twitch_auth_state,
-#stream_count {
+#stream_count,
+#latency_sync_state {
     background: #202733;
     border: 1px solid #344054;
     font-size: 11px;
@@ -464,6 +465,15 @@ body.chat_resizing #chatbox iframe {
 
 #twitch_auth_state {
     color: #98a2b3;
+}
+
+#latency_sync_state {
+    color: #98a2b3;
+}
+
+#latency_sync_state.state-active {
+    border-color: #2f6b4f;
+    color: #a7f3d0;
 }
 
 #twitch_auth_state.state-connected {
@@ -551,12 +561,14 @@ body.chat_resizing #chatbox iframe {
 }
 
 #main_size_value,
-#volume_value {
+#volume_value,
+#latency_sync_value {
     color: #d9e2ef;
 }
 
 #main_size_slider,
-#volume_slider {
+#volume_slider,
+#latency_sync_slider {
     width: 100%;
     accent-color: #22d3ee;
     cursor: pointer;

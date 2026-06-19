@@ -1,4 +1,4 @@
-{% set asset_version = 66 %}
+{% set asset_version = 67 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -30,6 +30,7 @@ $(document).ready(function() {
     initialize_audio_unlock();
     initialize_stream_players();
     initialize_playback_recovery();
+    initialize_latency_sync();
     initialize_stream_sorting();
     initialize_chat_resizer();
     initialize_stream_together_panel();
@@ -110,6 +111,21 @@ $(window).resize(function() {
                 <input type="range" id="volume_slider" min="0" max="100" value="70" aria-label="Master volume" oninput="set_master_volume(this.value)" />
                 <button type="button" class="panel_button icon_button" id="mute_button" onclick="toggle_master_mute()" aria-label="Unmute" title="Unmute">&#128263;</button>
             </div>
+        </div>
+    </div>
+
+    <div class="panel_section" id="latency_sync_panel">
+        <div class="section_header">
+            <span>Stream sync</span>
+            <span id="latency_sync_state">Need 2 streams</span>
+        </div>
+        <button type="button" class="panel_button" id="latency_sync_button" aria-pressed="false" onclick="toggle_latency_sync()">Sync streams</button>
+        <div class="slider_row">
+            <div class="slider_label">
+                <span>Extra buffer</span>
+                <span id="latency_sync_value">+0s</span>
+            </div>
+            <input type="range" id="latency_sync_slider" min="0" max="30" step="1" value="0" aria-label="Extra synchronization buffer" oninput="set_latency_sync_delay(this.value)" />
         </div>
     </div>
 
