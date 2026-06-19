@@ -183,3 +183,60 @@ test("latency sync uses hls timeline data when native seek ranges are unavailabl
     assert.equal(bounds.start, 60);
     assert.equal(bounds.end, 120);
 });
+
+
+test("fatal hls.js playback failure sticks to native HLS on reload", () => {
+    const {context} = loadApplication();
+    const video = {
+        canPlayType(type) {
+            return type === "application/vnd.apple.mpegurl" ? "maybe" : "";
+        }
+    };
+    context.stream_players.example = {hls: {}, video};
+    context.mark_stream_stalled = () => {};
+    let recoveryScheduled = false;
+    context.schedule_stream_recovery = () => { recoveryScheduled = true; };
+
+    context.handle_stream_playback_failure("example");
+
+    assert.equal(context.stream_force_native_hls.example, true);
+    assert.equal(recoveryScheduled, true);
+});
+
+
+test("hls diagnostics retain useful failure data without URL tokens", () => {
+    const {context} = loadApplication();
+
+    const diagnostics = context.hls_error_diagnostics("example", {
+        type: "networkError",
+        details: "manifestLoadError",
+        reason: "Forbidden",
+        response: {
+            code: 403,
+            text: "Forbidden",
+            url: "https://usher.ttvnw.net/api/channel/hls/example.m3u8?token=secret&sig=secret"
+        }
+    });
+
+    assert.equal(diagnostics.channel, "example");
+    assert.equal(diagnostics.type, "networkError");
+    assert.equal(diagnostics.details, "manifestLoadError");
+    assert.equal(diagnostics.response_code, 403);
+    assert.equal(diagnostics.url, "https://usher.ttvnw.net/api/channel/hls/example.m3u8");
+});
+
+
+test("stream API diagnostics identify failures before hls.js starts", () => {
+    const {context} = loadApplication();
+
+    const diagnostics = context.stream_api_error_diagnostics("example", {
+        status: 502,
+        statusText: "Bad Gateway",
+        responseJSON: {error: "Stream resolver exited unexpectedly."}
+    }, "error", "Bad Gateway");
+
+    assert.equal(diagnostics.channel, "example");
+    assert.equal(diagnostics.status, 502);
+    assert.equal(diagnostics.status_text, "Bad Gateway");
+    assert.equal(diagnostics.response, "Stream resolver exited unexpectedly.");
+});

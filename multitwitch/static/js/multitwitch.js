@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "67";
+var APP_VERSION = "68";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -45,6 +45,10 @@ var MIN_REST_HEIGHT = 80;  // keep at least a thin strip for the smaller tiles
 var GRID_GAP = 4;     // must match #streams `gap` in the CSS
 var TILE_CHROME = 4;  // border width jQuery adds on top of the size we set
 var stream_quality_choice = {};  // name -> requested quality label, survives reloads
+// Edge's native HLS path is more tolerant of some Twitch delivery failures.
+// Once hls.js fails fatally for a channel, keep subsequent reloads native so a
+// fresh hls.js instance cannot enter an unbounded load/fail/reload loop.
+var stream_force_native_hls = {};
 var quality_adapt_timer = null;
 // Only re-pick quality once tiles have stopped resizing for this long, so
 // dragging the main-size slider or a window edge doesn't thrash the players.
@@ -1261,7 +1265,8 @@ function load_direct_stream(tile, name, force_refresh, quality) {
                 stream_players[name].qualities = data.qualities || [];
             }
         },
-        error: function(xhr) {
+        error: function(xhr, text_status, error_thrown) {
+            log_stream_api_error(name, xhr, text_status, error_thrown);
             var message = (xhr.responseJSON && xhr.responseJSON.error) || "Could not load stream.";
             if (stream_players[name]) {
                 stream_players[name].recovering = false;
@@ -1272,6 +1277,25 @@ function load_direct_stream(tile, name, force_refresh, quality) {
             classify_stream_load_error(tile, name, message);
         }
     });
+}
+
+function stream_api_error_diagnostics(name, xhr, text_status, error_thrown) {
+    xhr = xhr || {};
+    return {
+        channel: name,
+        status: xhr.status || 0,
+        status_text: xhr.statusText || text_status || null,
+        error: error_thrown ? String(error_thrown) : null,
+        response: xhr.responseJSON && xhr.responseJSON.error
+            ? String(xhr.responseJSON.error).slice(0, 200)
+            : (xhr.responseText ? String(xhr.responseText).slice(0, 200) : null)
+    };
+}
+
+function log_stream_api_error(name, xhr, text_status, error_thrown) {
+    console.error("[MultiTwitch] Stream API error " + JSON.stringify(
+        stream_api_error_diagnostics(name, xhr, text_status, error_thrown)
+    ));
 }
 
 function classify_stream_load_error(tile, name, fallback_message) {
@@ -1305,6 +1329,7 @@ function classify_stream_load_error(tile, name, fallback_message) {
 }
 
 function attach_hls_stream(tile, name, video, url) {
+    var recovery_attempt = stream_players[name] ? stream_players[name].recovery_attempt : 0;
     destroy_stream_player(name);
     stream_players[name] = {
         video: video,
@@ -1314,7 +1339,7 @@ function attach_hls_stream(tile, name, video, url) {
         recovering: false,
         last_time: video.currentTime || 0,
         last_progress_at: Date.now(),
-        recovery_attempt: 0,
+        recovery_attempt: recovery_attempt,
         recovery_timer: null,
         resume_timer: null,
         sync_natural_latency: null,
@@ -1340,6 +1365,7 @@ function attach_hls_stream(tile, name, video, url) {
             var player = stream_players[name];
             if (player && player.video === video) {
                 player.recovering = false;
+                player.recovery_attempt = 0;
                 player.last_progress_at = Date.now();
                 player.last_time = video.currentTime || 0;
                 if (!player.resume_timer) {
@@ -1357,6 +1383,7 @@ function attach_hls_stream(tile, name, video, url) {
             if (player && player.video === video && video.currentTime > player.last_time + 0.05) {
                 player.last_time = video.currentTime;
                 player.last_progress_at = Date.now();
+                player.recovery_attempt = 0;
                 player.stalled = false;
                 if (player.resume_timer) {
                     clearTimeout(player.resume_timer);
@@ -1366,11 +1393,17 @@ function attach_hls_stream(tile, name, video, url) {
                 update_stream_playback_state(name);
             }
         })
-        .on("ended.playbackRecovery error.playbackRecovery", function() {
-            mark_stream_stalled(name, "Reconnecting stream...");
-            reload_stream_playback(name);
+        .on("ended.playbackRecovery", function() {
+            handle_stream_playback_failure(name);
+        })
+        .on("error.playbackRecovery", function() {
+            log_native_media_error(name, video);
+            handle_stream_playback_failure(name);
         });
-    if (window.Hls && Hls.isSupported()) {
+    var native_hls_supported = !!video.canPlayType("application/vnd.apple.mpegurl");
+    if (stream_force_native_hls[name] && native_hls_supported) {
+        video.src = url;
+    } else if (window.Hls && Hls.isSupported()) {
         var hls = new Hls({
             liveSyncDurationCount: 3,
             lowLatencyMode: true
@@ -1382,13 +1415,13 @@ function attach_hls_stream(tile, name, video, url) {
                 if (!player || player.hls !== hls) {
                     return;
                 }
-                mark_stream_stalled(name, "Reconnecting stream...");
-                reload_stream_playback(name);
+                log_fatal_hls_error(name, data);
+                handle_stream_playback_failure(name);
             }
         });
         hls.loadSource(url);
         hls.attachMedia(video);
-    } else if (video.canPlayType("application/vnd.apple.mpegurl")) {
+    } else if (native_hls_supported) {
         video.src = url;
     } else {
         set_player_status(tile, "This browser cannot play HLS streams.");
@@ -1399,6 +1432,63 @@ function attach_hls_stream(tile, name, video, url) {
     safe_play(video);
     set_player_status(tile, "");
     sync_active_stream_audio();
+}
+
+function sanitize_playback_url(value) {
+    if (!value) {
+        return null;
+    }
+    var text = String(value);
+    try {
+        var parsed = new URL(text, window.location && window.location.href);
+        return parsed.origin + parsed.pathname;
+    } catch (e) {
+        return text.split("?")[0].split("#")[0];
+    }
+}
+
+function hls_error_diagnostics(name, data) {
+    data = data || {};
+    var response = data.response || {};
+    var context = data.context || {};
+    var frag = data.frag || {};
+    return {
+        channel: name,
+        type: data.type || null,
+        details: data.details || null,
+        reason: data.reason || null,
+        response_code: response.code || response.status || null,
+        response_text: response.text ? String(response.text).slice(0, 200) : null,
+        url: sanitize_playback_url(data.url || response.url || context.url || frag.url)
+    };
+}
+
+function log_fatal_hls_error(name, data) {
+    console.error("[MultiTwitch] Fatal hls.js error " + JSON.stringify(hls_error_diagnostics(name, data)));
+}
+
+function log_native_media_error(name, video) {
+    var media_error = video && video.error;
+    console.error("[MultiTwitch] Native media error " + JSON.stringify({
+        channel: name,
+        code: media_error ? media_error.code : null,
+        message: media_error && media_error.message ? media_error.message : null,
+        network_state: video ? video.networkState : null,
+        ready_state: video ? video.readyState : null,
+        url: sanitize_playback_url(video && (video.currentSrc || video.src))
+    }));
+}
+
+function handle_stream_playback_failure(name) {
+    var player = stream_players[name];
+    if (!player) {
+        return;
+    }
+    if (player.hls && player.video && player.video.canPlayType("application/vnd.apple.mpegurl")) {
+        stream_force_native_hls[name] = true;
+    }
+    mark_stream_stalled(name, "Reconnecting stream...");
+    schedule_stream_recovery(name);
 }
 
 function initialize_playback_recovery() {
