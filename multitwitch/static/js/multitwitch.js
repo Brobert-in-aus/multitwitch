@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "68";
+var APP_VERSION = "69";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1441,9 +1441,10 @@ function sanitize_playback_url(value) {
     var text = String(value);
     try {
         var parsed = new URL(text, window.location && window.location.href);
-        return parsed.origin + parsed.pathname;
+        var extension_match = parsed.pathname.match(/(\.[A-Za-z0-9]+)$/);
+        return parsed.origin + "/[redacted]" + (extension_match ? extension_match[1] : "");
     } catch (e) {
-        return text.split("?")[0].split("#")[0];
+        return "[redacted]";
     }
 }
 

@@ -23,6 +23,7 @@ function loadApplication() {
         Math,
         setInterval() {},
         setTimeout,
+        URL,
         window: {localStorage},
         document: {},
         $() {
@@ -222,7 +223,7 @@ test("hls diagnostics retain useful failure data without URL tokens", () => {
     assert.equal(diagnostics.type, "networkError");
     assert.equal(diagnostics.details, "manifestLoadError");
     assert.equal(diagnostics.response_code, 403);
-    assert.equal(diagnostics.url, "https://usher.ttvnw.net/api/channel/hls/example.m3u8");
+    assert.equal(diagnostics.url, "https://usher.ttvnw.net/[redacted].m3u8");
 });
 
 
