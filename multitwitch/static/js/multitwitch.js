@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "71";
+var APP_VERSION = "72";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1351,6 +1351,7 @@ function attach_hls_stream(tile, name, video, url) {
         recovery_attempt: recovery_attempt,
         recovery_timer: null,
         resume_timer: null,
+        resume_blocked: false,
         sync_natural_latency: null,
         last_sync_seek_at: 0
     };
@@ -1375,6 +1376,7 @@ function attach_hls_stream(tile, name, video, url) {
             if (player && player.video === video) {
                 player.recovering = false;
                 player.recovery_attempt = 0;
+                player.resume_blocked = false;
                 player.last_progress_at = Date.now();
                 player.last_time = video.currentTime || 0;
                 if (!player.resume_timer) {
@@ -1393,6 +1395,7 @@ function attach_hls_stream(tile, name, video, url) {
                 player.last_time = video.currentTime;
                 player.last_progress_at = Date.now();
                 player.recovery_attempt = 0;
+                player.resume_blocked = false;
                 player.stalled = false;
                 if (player.resume_timer) {
                     clearTimeout(player.resume_timer);
@@ -1418,6 +1421,12 @@ function attach_hls_stream(tile, name, video, url) {
             lowLatencyMode: true
         });
         stream_players[name].hls = hls;
+        hls.on(Hls.Events.MANIFEST_PARSED, function() {
+            retry_hls_startup_play(name, hls, video);
+        });
+        hls.on(Hls.Events.FRAG_BUFFERED, function() {
+            retry_hls_startup_play(name, hls, video);
+        });
         hls.on(Hls.Events.ERROR, function(event, data) {
             if (data && data.fatal) {
                 var player = stream_players[name];
@@ -1441,6 +1450,16 @@ function attach_hls_stream(tile, name, video, url) {
     safe_play(video);
     set_player_status(tile, "");
     sync_active_stream_audio();
+}
+
+function retry_hls_startup_play(name, hls, video) {
+    var player = stream_players[name];
+    if (!player || player.hls !== hls || player.video !== video || player.manual_paused || !video.paused) {
+        return;
+    }
+    player.resume_blocked = false;
+    player.last_progress_at = Date.now();
+    safe_play(video);
 }
 
 function sanitize_playback_url(value) {
@@ -1812,6 +1831,7 @@ function resume_all_after_inactive() {
         }
         player.last_time = player.video.currentTime || 0;
         player.last_progress_at = Date.now();
+        player.resume_blocked = false;
         if (player.video.paused) {
             safe_play(player.video);
         }
@@ -1851,6 +1871,9 @@ function ensure_stream_playing(name) {
     }
     var no_progress = now - player.last_progress_at > 8000;
     if (player.video.paused) {
+        if (player.resume_blocked) {
+            return;
+        }
         attempt_stream_resume(name);
     } else if (player.stalled || no_progress) {
         mark_stream_stalled(name, "Reconnecting stream...");
@@ -1864,6 +1887,7 @@ function attempt_stream_resume(name) {
         return;
     }
     player.stalled = true;
+    player.resume_blocked = false;
     var resume_start_time = player.video.currentTime || 0;
     set_player_status(stream_tile_by_name(name), "Resuming stream...");
     if (player.hls) {
@@ -1897,9 +1921,21 @@ function attempt_stream_resume(name) {
             update_stream_playback_state(name);
             return;
         }
+        if (media_is_ready_but_paused(current.video)) {
+            current.stalled = false;
+            current.resume_blocked = true;
+            current.last_progress_at = Date.now();
+            set_player_status(stream_tile_by_name(name), "Paused by browser. Press play to resume.");
+            update_stream_playback_state(name);
+            return;
+        }
         mark_stream_stalled(name, "Reconnecting stream...");
         reload_stream_playback(name);
     }, 2500);
+}
+
+function media_is_ready_but_paused(video) {
+    return !!(video && video.paused && !video.error && video.readyState >= 2);
 }
 
 function mark_stream_stalled(name, message) {
@@ -2005,6 +2041,7 @@ function toggle_stream_playback(name, event) {
         player.manual_paused = false;
         player.recovering = false;
         player.stalled = false;
+        player.resume_blocked = false;
         attempt_stream_resume(name);
     } else {
         player.manual_paused = true;

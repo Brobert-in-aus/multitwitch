@@ -262,3 +262,13 @@ test("stream API diagnostics identify failures before hls.js starts", () => {
     assert.equal(diagnostics.status_text, "Bad Gateway");
     assert.equal(diagnostics.response, "Stream resolver exited unexpectedly.");
 });
+
+
+test("buffered paused media is not treated as a dead stream", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.media_is_ready_but_paused({paused: true, error: null, readyState: 4}), true);
+    assert.equal(context.media_is_ready_but_paused({paused: true, error: null, readyState: 1}), false);
+    assert.equal(context.media_is_ready_but_paused({paused: true, error: {code: 3}, readyState: 4}), false);
+    assert.equal(context.media_is_ready_but_paused({paused: false, error: null, readyState: 4}), false);
+});
