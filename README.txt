@@ -28,8 +28,9 @@ Streams and playback:
   first-run default is 70% and muted.
 * Per-stream pause and resume controls.
 * Per-stream jump-to-live controls for correcting multi-stream drift.
-* Optional latency synchronization that aligns streams to the slowest live feed,
-  with a persisted extra-buffer setting for less stable connections.
+* Optional latency synchronization (experimental) that aligns streams to the
+  slowest live feed, with persisted extra-buffer and synced-tolerance settings.
+  May briefly desync after the tab is hidden, then re-aligns on return.
 * Playback recovery when Chromium suspends background video, plus a distinct
   "Stream offline" state when Twitch confirms a failed channel is offline.
 * Hover overlays for stream title, channel name, and game metadata.

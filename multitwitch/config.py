@@ -38,5 +38,8 @@ def routes(config):
     config.add_route('direct_stream_url', '/api/direct-stream/{channel}')
     config.add_view(direct.stream_url, route_name='direct_stream_url')
 
+    config.add_route('hls_proxy', '/api/hls-proxy')
+    config.add_view(direct.hls_proxy, route_name='hls_proxy')
+
     config.add_route('root', '*streams')
     config.add_view(WebView.home, route_name='root')

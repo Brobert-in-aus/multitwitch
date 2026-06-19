@@ -186,6 +186,27 @@ test("latency sync uses hls timeline data when native seek ranges are unavailabl
 });
 
 
+test("sync tolerance widens the synced dead-band and is clamped", () => {
+    const {context, localStorage} = loadApplication();
+
+    // A 0.6s drift is "synced" under a 1.0s tolerance (default would nudge it).
+    const within = context.latency_sync_correction(7.6, 7, 100, 80, 120, 1.0);
+    assert.equal(within.seek_to, null);
+    assert.equal(within.playback_rate, 1);
+
+    // Past a tolerance larger than the seek threshold, it seeks straight away.
+    const beyond = context.latency_sync_correction(9, 7, 100, 80, 120, 1.0);
+    assert.equal(beyond.seek_to, 102);
+    assert.equal(beyond.playback_rate, 1);
+
+    assert.equal(context.clamp_latency_sync_tolerance(9), 3);
+    assert.equal(context.clamp_latency_sync_tolerance(0), 0.1);
+    assert.equal(context.clamp_latency_sync_tolerance(0.24), 0.2);
+    localStorage.setItem("multitwitch.latencySyncTolerance", "1.5");
+    assert.equal(context.load_saved_latency_sync_tolerance(), 1.5);
+});
+
+
 test("fatal hls.js playback failure sticks to native HLS on reload", () => {
     const {context} = loadApplication();
     const video = {

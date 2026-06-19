@@ -1,6 +1,9 @@
 import re
 import threading
 import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote, urljoin, urlsplit
+from urllib.request import Request, urlopen
 
 import simplejson as json
 from pyramid.response import Response
@@ -100,6 +103,90 @@ def _resolve_stream_url(channel, quality):
         'qualities': qualities,
         'url': url,
     }
+
+
+PLAYLIST_CONTENT_TYPE = 'application/vnd.apple.mpegurl'
+HLS_URI_ATTRIBUTE_RE = re.compile(r'URI="([^"]+)"')
+
+
+def hls_proxy(request):
+    """Proxy a Twitch HLS *playlist* so hls.js can fetch it same-origin.
+
+    hls.js loads the playlist with a cross-origin JS request; Twitch's playlist
+    host 403s those from non-Twitch origins. Fetching it server-side (no Origin
+    header) succeeds, and the segment URIs inside stay absolute Twitch CDN links
+    -- which DO allow CORS -- so the browser still pulls the heavy segment data
+    directly. Only the small playlist text passes through here.
+    """
+    raw_url = request.params.get('url', '')
+    if not raw_url:
+        return _json_response({'error': 'Missing url parameter.'}, status=400)
+    if not _is_allowed_hls_url(raw_url):
+        return _json_response({'error': 'URL host is not allowed.'}, status=400)
+
+    proxied = Request(raw_url, headers={'User-Agent': 'Mozilla/5.0'})
+    try:
+        with urlopen(proxied, timeout=10) as upstream:
+            body = upstream.read().decode('utf-8', 'replace')
+            final_url = upstream.geturl() if hasattr(upstream, 'geturl') else raw_url
+    except HTTPError as exc:
+        return _json_response({'error': 'Upstream returned %d.' % exc.code}, status=502)
+    except URLError as exc:
+        return _json_response({'error': str(exc.reason)}, status=502)
+    if not _is_allowed_hls_url(final_url):
+        return _json_response({'error': 'Upstream redirect host is not allowed.'}, status=502)
+
+    response = Response(
+        body=_rewrite_playlist(body, final_url).encode('utf-8'),
+        content_type=PLAYLIST_CONTENT_TYPE,
+        charset='UTF-8',
+    )
+    # Live playlists roll every few seconds -- never cache.
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def _is_allowed_hls_url(url):
+    # Allowlist Twitch hosts only: this endpoint fetches arbitrary URLs, so an
+    # open allowlist would make it an SSRF/open proxy.
+    parts = urlsplit(url)
+    if parts.scheme != 'https':
+        return False
+    host = (parts.hostname or '').lower()
+    return host == 'ttvnw.net' or host.endswith('.ttvnw.net')
+
+
+def _hls_proxy_path(url):
+    return '/api/hls-proxy?url=' + quote(url, safe='')
+
+
+def _rewrite_hls_uri(uri, base_url, playlist=False):
+    absolute = urljoin(base_url, uri)
+    return _hls_proxy_path(absolute) if playlist else absolute
+
+
+def _rewrite_playlist(body, base_url):
+    # Keep every master/alternate playlist same-origin. Segments, keys and init
+    # files remain direct Twitch CDN URLs, so their bandwidth bypasses us.
+    lines = []
+    next_uri_is_playlist = False
+    for line in body.split('\n'):
+        stripped = line.strip()
+        if stripped and not stripped.startswith('#'):
+            lines.append(_rewrite_hls_uri(stripped, base_url, next_uri_is_playlist))
+            next_uri_is_playlist = False
+        else:
+            tag_has_playlist_uri = stripped.startswith('#EXT-X-MEDIA:') \
+                or stripped.startswith('#EXT-X-I-FRAME-STREAM-INF:')
+            rewritten = HLS_URI_ATTRIBUTE_RE.sub(
+                lambda match: 'URI="%s"' % _rewrite_hls_uri(
+                    match.group(1), base_url, tag_has_playlist_uri,
+                ),
+                line,
+            )
+            lines.append(rewritten)
+            next_uri_is_playlist = stripped.startswith('#EXT-X-STREAM-INF:')
+    return '\n'.join(lines)
 
 
 def _json_response(data, status=200):

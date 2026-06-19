@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "69";
+var APP_VERSION = "71";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -54,11 +54,13 @@ var quality_adapt_timer = null;
 // dragging the main-size slider or a window edge doesn't thrash the players.
 var QUALITY_ADAPT_DELAY = 10000;
 var LATENCY_SYNC_DELAY_STORAGE_KEY = "multitwitch.latencySyncDelay";
+var LATENCY_SYNC_TOLERANCE_STORAGE_KEY = "multitwitch.latencySyncTolerance";
 var LATENCY_SYNC_INTERVAL = 2000;
 var LATENCY_SYNC_HARD_THRESHOLD = 0.75;
-var LATENCY_SYNC_SOFT_THRESHOLD = 0.20;
+var LATENCY_SYNC_SOFT_THRESHOLD = 0.20;  // default "considered synced" tolerance
 var latency_sync_enabled = false;
 var latency_sync_extra_delay = load_saved_latency_sync_delay();
+var latency_sync_tolerance = load_saved_latency_sync_tolerance();
 var latency_sync_base_latency = null;
 var latency_sync_timer = null;
 var twitch_user = null;
@@ -1328,6 +1330,13 @@ function classify_stream_load_error(tile, name, fallback_message) {
     });
 }
 
+// hls.js fetches the playlist via a cross-origin JS request, which Twitch's
+// playlist host 403s from non-Twitch origins. Route just the playlist through
+// our same-origin proxy; segments stay absolute and load direct from the CDN.
+function hls_proxy_url(url) {
+    return "/api/hls-proxy?url=" + encodeURIComponent(url);
+}
+
 function attach_hls_stream(tile, name, video, url) {
     var recovery_attempt = stream_players[name] ? stream_players[name].recovery_attempt : 0;
     destroy_stream_player(name);
@@ -1419,7 +1428,7 @@ function attach_hls_stream(tile, name, video, url) {
                 handle_stream_playback_failure(name);
             }
         });
-        hls.loadSource(url);
+        hls.loadSource(hls_proxy_url(url));
         hls.attachMedia(video);
     } else if (native_hls_supported) {
         video.src = url;
@@ -1519,9 +1528,40 @@ function clamp_latency_sync_delay(value) {
     return Math.max(0, Math.min(30, Math.round(value)));
 }
 
+function load_saved_latency_sync_tolerance() {
+    try {
+        var saved = parseFloat(window.localStorage.getItem(LATENCY_SYNC_TOLERANCE_STORAGE_KEY));
+        return isNaN(saved) ? LATENCY_SYNC_SOFT_THRESHOLD : clamp_latency_sync_tolerance(saved);
+    } catch (e) {
+        return LATENCY_SYNC_SOFT_THRESHOLD;
+    }
+}
+
+function clamp_latency_sync_tolerance(value) {
+    value = parseFloat(value);
+    if (isNaN(value)) {
+        return LATENCY_SYNC_SOFT_THRESHOLD;
+    }
+    // 0.1s .. 3.0s, to a tenth of a second.
+    return Math.max(0.1, Math.min(3, Math.round(value * 10) / 10));
+}
+
+function set_latency_sync_tolerance(value) {
+    latency_sync_tolerance = clamp_latency_sync_tolerance(value);
+    try {
+        window.localStorage.setItem(LATENCY_SYNC_TOLERANCE_STORAGE_KEY, String(latency_sync_tolerance));
+    } catch (e) {}
+    update_latency_sync_ui();
+    if (latency_sync_enabled) {
+        run_latency_sync();
+    }
+}
+
 function initialize_latency_sync() {
     latency_sync_extra_delay = load_saved_latency_sync_delay();
+    latency_sync_tolerance = load_saved_latency_sync_tolerance();
     $("#latency_sync_slider").val(latency_sync_extra_delay);
+    $("#latency_sync_tolerance_slider").val(latency_sync_tolerance);
     update_latency_sync_ui();
     if (!latency_sync_timer) {
         latency_sync_timer = setInterval(run_latency_sync, LATENCY_SYNC_INTERVAL);
@@ -1592,16 +1632,23 @@ function calculate_latency_sync_target(players, extra_delay) {
     return slowest === null ? null : slowest + clamp_latency_sync_delay(extra_delay);
 }
 
-function latency_sync_correction(latency, target, current_time, seek_start, seek_end) {
+function latency_sync_correction(latency, target, current_time, seek_start, seek_end, tolerance) {
+    if (tolerance === undefined) {
+        tolerance = LATENCY_SYNC_SOFT_THRESHOLD;
+    }
     var error = latency - target;
-    if (Math.abs(error) >= LATENCY_SYNC_HARD_THRESHOLD) {
+    var magnitude = Math.abs(error);
+    // Within the user's tolerance -> considered synced, leave it alone.
+    if (magnitude < tolerance) {
+        return {seek_to: null, playback_rate: 1};
+    }
+    // Big gaps seek; smaller ones nudge the rate. A loose tolerance can exceed
+    // the seek threshold, so seek only once past whichever is larger.
+    if (magnitude >= Math.max(LATENCY_SYNC_HARD_THRESHOLD, tolerance)) {
         var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + error));
         return {seek_to: seek_to, playback_rate: 1};
     }
-    if (Math.abs(error) >= LATENCY_SYNC_SOFT_THRESHOLD) {
-        return {seek_to: null, playback_rate: error > 0 ? 1.03 : 0.97};
-    }
-    return {seek_to: null, playback_rate: 1};
+    return {seek_to: null, playback_rate: error > 0 ? 1.03 : 0.97};
 }
 
 function collect_latency_sync_players() {
@@ -1695,7 +1742,8 @@ function run_latency_sync() {
                 target,
                 video.currentTime || 0,
                 bounds.start,
-                bounds.end
+                bounds.end,
+                latency_sync_tolerance
             );
             if (correction.seek_to !== null && now - item.player.last_sync_seek_at >= 1500) {
                 video.playbackRate = 1;
@@ -1729,6 +1777,7 @@ function update_latency_sync_ui(status) {
         .attr("aria-pressed", latency_sync_enabled ? "true" : "false")
         .text(latency_sync_enabled ? "Stop sync" : "Sync streams");
     $("#latency_sync_value").text("+" + latency_sync_extra_delay + "s");
+    $("#latency_sync_tolerance_value").text("±" + latency_sync_tolerance.toFixed(1) + "s");
     if (!status && latency_sync_enabled && latency_sync_base_latency !== null) {
         status = (latency_sync_base_latency + latency_sync_extra_delay).toFixed(1) + "s target";
     }

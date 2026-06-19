@@ -562,16 +562,31 @@ body.chat_resizing #chatbox iframe {
 
 #main_size_value,
 #volume_value,
-#latency_sync_value {
+#latency_sync_value,
+#latency_sync_tolerance_value {
     color: #d9e2ef;
 }
 
 #main_size_slider,
 #volume_slider,
-#latency_sync_slider {
+#latency_sync_slider,
+#latency_sync_tolerance_slider {
     width: 100%;
     accent-color: #22d3ee;
     cursor: pointer;
+}
+
+/* "Experimental" chip next to a section title (amber, matches the setup state). */
+.experimental_tag {
+    background: #2a2310;
+    border: 1px solid #7c5e1a;
+    color: #fbbf24;
+    font-size: 9px;
+    font-weight: normal;
+    letter-spacing: 0;
+    margin-left: 6px;
+    padding: 1px 5px;
+    vertical-align: middle;
 }
 
 .volume_control_row {

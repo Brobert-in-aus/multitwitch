@@ -92,6 +92,67 @@ class DirectStreamTests(unittest.TestCase):
         self.assertEqual(response_json(response)['error'], 'resolver failed')
 
 
+class HlsProxyTests(unittest.TestCase):
+    def test_allowlist_accepts_twitch_https_hosts_only(self):
+        self.assertTrue(direct._is_allowed_hls_url('https://aps23.playlist.ttvnw.net/v1/playlist/x.m3u8'))
+        self.assertTrue(direct._is_allowed_hls_url('https://ttvnw.net/x.m3u8'))
+        # Wrong scheme, unrelated host, and lookalike hosts must be rejected.
+        self.assertFalse(direct._is_allowed_hls_url('http://aps23.playlist.ttvnw.net/x.m3u8'))
+        self.assertFalse(direct._is_allowed_hls_url('https://example.com/x.m3u8'))
+        self.assertFalse(direct._is_allowed_hls_url('https://evilttvnw.net/x.m3u8'))
+        self.assertFalse(direct._is_allowed_hls_url('https://ttvnw.net.attacker.com/x.m3u8'))
+        self.assertFalse(direct._is_allowed_hls_url('https://127.0.0.1/x.m3u8'))
+
+    def test_rewrite_proxies_nested_playlists_but_keeps_segments_direct(self):
+        base = 'https://aps23.playlist.ttvnw.net/v1/playlist/abc.m3u8'
+        body = '\n'.join([
+            '#EXTM3U',
+            '#EXT-X-MEDIA:TYPE=AUDIO,URI="audio.m3u8"',
+            '#EXT-X-STREAM-INF:BANDWIDTH=6000000',
+            'source.m3u8',
+            '#EXT-X-TARGETDURATION:6',
+            '#EXTINF:2.0,',
+            'https://cdn.hls.ttvnw.net/seg-1.ts',
+            '#EXT-X-MAP:URI="init.mp4"',
+            '#EXTINF:2.0,',
+            'seg-2.ts',
+        ])
+
+        result = direct._rewrite_playlist(body, base).split('\n')
+
+        self.assertEqual(result[0], '#EXTM3U')
+        self.assertIn('/api/hls-proxy?url=', result[1])
+        self.assertTrue(result[3].startswith('/api/hls-proxy?url='))
+        self.assertEqual(result[6], 'https://cdn.hls.ttvnw.net/seg-1.ts')
+        self.assertIn('URI="https://aps23.playlist.ttvnw.net/v1/playlist/init.mp4"', result[7])
+        self.assertEqual(result[9], 'https://aps23.playlist.ttvnw.net/v1/playlist/seg-2.ts')
+
+    def test_missing_or_disallowed_url_returns_400(self):
+        missing = direct.hls_proxy(SimpleNamespace(params={}))
+        self.assertEqual(missing.status_code, 400)
+
+        disallowed = direct.hls_proxy(SimpleNamespace(params={'url': 'https://example.com/x.m3u8'}))
+        self.assertEqual(disallowed.status_code, 400)
+
+    def test_proxy_returns_playlist_body_with_no_store(self):
+        playlist = b'#EXTM3U\nhttps://cdn.hls.ttvnw.net/seg-1.ts\n'
+        fake_upstream = mock.MagicMock()
+        fake_upstream.read.return_value = playlist
+        fake_upstream.geturl.return_value = 'https://aps23.playlist.ttvnw.net/v1/playlist/abc.m3u8'
+        fake_upstream.__enter__.return_value = fake_upstream
+        fake_upstream.__exit__.return_value = False
+
+        with mock.patch.object(direct, 'urlopen', return_value=fake_upstream):
+            response = direct.hls_proxy(SimpleNamespace(
+                params={'url': 'https://aps23.playlist.ttvnw.net/v1/playlist/abc.m3u8'}
+            ))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.content_type, 'application/vnd.apple.mpegurl')
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertIn('https://cdn.hls.ttvnw.net/seg-1.ts', response.text)
+
+
 class TwitchViewTests(unittest.TestCase):
     def test_channel_is_live_uses_stream_presence(self):
         with mock.patch.object(twitch, '_gql_request', return_value={
