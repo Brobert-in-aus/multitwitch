@@ -117,3 +117,69 @@ test("live-stream indexing drops channels absent from the latest poll", () => {
     assert.equal(indexed.still_live.title, "Current");
     assert.equal(indexed.now_offline, undefined);
 });
+
+
+test("latency sync targets the slowest natural stream plus extra buffer", () => {
+    const {context, localStorage} = loadApplication();
+
+    const target = context.calculate_latency_sync_target([
+        {natural_latency: 4.2},
+        {natural_latency: 6.8},
+        {natural_latency: 5.1}
+    ], 3);
+
+    assert.equal(target, 9.8);
+    assert.equal(context.clamp_latency_sync_delay(42), 30);
+    assert.equal(context.clamp_latency_sync_delay(-2), 0);
+    localStorage.setItem("multitwitch.latencySyncDelay", "7");
+    assert.equal(context.load_saved_latency_sync_delay(), 7);
+});
+
+
+test("latency sync seeks large errors and gently corrects small drift", () => {
+    const {context} = loadApplication();
+
+    const behind = context.latency_sync_correction(10, 7, 100, 80, 120);
+    assert.equal(behind.seek_to, 103);
+    assert.equal(behind.playback_rate, 1);
+
+    const ahead = context.latency_sync_correction(6.6, 7, 100, 80, 120);
+    assert.equal(ahead.seek_to, null);
+    assert.equal(ahead.playback_rate, 0.97);
+
+    const aligned = context.latency_sync_correction(7.1, 7, 100, 80, 120);
+    assert.equal(aligned.seek_to, null);
+    assert.equal(aligned.playback_rate, 1);
+});
+
+
+test("player latency prefers hls timing and falls back to the seekable edge", () => {
+    const {context} = loadApplication();
+    const video = {
+        currentTime: 91,
+        seekable: {
+            length: 1,
+            end() { return 100; }
+        }
+    };
+
+    assert.equal(context.measure_player_latency({hls: {latency: 5.5}, video}), 5.5);
+    assert.equal(context.measure_player_latency({hls: null, video}), 9);
+});
+
+
+test("latency sync uses hls timeline data when native seek ranges are unavailable", () => {
+    const {context} = loadApplication();
+    const player = {
+        hls: {
+            latency: 0,
+            latestLevelDetails: {live: true, edge: 120, age: 2, totalduration: 60}
+        },
+        video: {currentTime: 113, seekable: {length: 0}}
+    };
+
+    assert.equal(context.measure_player_latency(player), 9);
+    const bounds = context.player_seek_bounds(player);
+    assert.equal(bounds.start, 60);
+    assert.equal(bounds.end, 120);
+});

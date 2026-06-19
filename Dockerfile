@@ -25,6 +25,7 @@ RUN pip install -r requirements.txt
 COPY . .
 # Register the egg entry point (egg:multitwitch) without re-resolving deps:
 RUN pip install -e . --no-deps \
+  && sed -i 's/\r$//' ./docker/entrypoint.sh \
   && chmod +x ./docker/entrypoint.sh \
   && mkdir -p /app/data \
   && chown -R app:app /app
