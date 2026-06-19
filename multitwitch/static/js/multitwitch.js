@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "72";
+var APP_VERSION = "74";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -941,6 +941,7 @@ function unlock_audio() {
         return;
     }
     audio_unlocked = true;
+    update_mute_button();
     sync_active_stream_audio();
 }
 
@@ -1097,6 +1098,10 @@ function sync_active_stream_audio() {
             if (player.manual_paused) {
                 player.video.muted = target.muted;
                 player.video.volume = target.muted ? 0.0 : target.volume;
+            } else if (player.startup_pending) {
+                player.video.muted = true;
+                player.video.volume = 0.0;
+                safe_play(player.video);
             } else {
                 apply_video_audio(player.video, !target.muted, target.volume);
             }
@@ -1340,6 +1345,10 @@ function hls_proxy_url(url) {
 function attach_hls_stream(tile, name, video, url) {
     var recovery_attempt = stream_players[name] ? stream_players[name].recovery_attempt : 0;
     destroy_stream_player(name);
+    // Establish muted autoplay before attaching a source. Saved audio state is
+    // restored only after the browser confirms playback with `playing`.
+    video.muted = true;
+    video.volume = 0.0;
     stream_players[name] = {
         video: video,
         hls: null,
@@ -1352,6 +1361,8 @@ function attach_hls_stream(tile, name, video, url) {
         recovery_timer: null,
         resume_timer: null,
         resume_blocked: false,
+        startup_pending: true,
+        startup_started_at: Date.now(),
         sync_natural_latency: null,
         last_sync_seek_at: 0
     };
@@ -1362,6 +1373,9 @@ function attach_hls_stream(tile, name, video, url) {
                 return;
             }
             update_stream_playback_state(name);
+            if (!player.manual_paused && resume_muted_after_blocked_audio(player)) {
+                return;
+            }
             // Ignore pauses caused by the tab/window going to the background --
             // browsers pause muted video there. We resume gently on return
             // rather than fighting it (which caused reload churn).
@@ -1374,6 +1388,8 @@ function attach_hls_stream(tile, name, video, url) {
         .on("playing.playbackRecovery", function() {
             var player = stream_players[name];
             if (player && player.video === video) {
+                var startup_completed = player.startup_pending;
+                player.startup_pending = false;
                 player.recovering = false;
                 player.recovery_attempt = 0;
                 player.resume_blocked = false;
@@ -1385,6 +1401,9 @@ function attach_hls_stream(tile, name, video, url) {
                 }
                 if (latency_sync_enabled && player.sync_natural_latency === null) {
                     setTimeout(run_latency_sync, 250);
+                }
+                if (startup_completed) {
+                    sync_active_stream_audio();
                 }
             }
             update_stream_playback_state(name);
@@ -1445,11 +1464,7 @@ function attach_hls_stream(tile, name, video, url) {
         set_player_status(tile, "This browser cannot play HLS streams.");
         return;
     }
-    video.muted = true;
-    video.volume = 0.0;
     safe_play(video);
-    set_player_status(tile, "");
-    sync_active_stream_audio();
 }
 
 function retry_hls_startup_play(name, hls, video) {
@@ -1869,6 +1884,18 @@ function ensure_stream_playing(name) {
         update_stream_playback_state(name);
         return;
     }
+    if (player.startup_pending && now - player.startup_started_at < 20000) {
+        if (player.video.paused && player.video.readyState >= 2) {
+            player.video.muted = true;
+            player.video.volume = 0.0;
+            safe_play(player.video);
+        }
+        return;
+    }
+    player.startup_pending = false;
+    if (resume_muted_after_blocked_audio(player)) {
+        return;
+    }
     var no_progress = now - player.last_progress_at > 8000;
     if (player.video.paused) {
         if (player.resume_blocked) {
@@ -1921,6 +1948,13 @@ function attempt_stream_resume(name) {
             update_stream_playback_state(name);
             return;
         }
+        if (resume_muted_after_blocked_audio(current)) {
+            current.stalled = false;
+            current.last_progress_at = Date.now();
+            set_player_status(stream_tile_by_name(name), "");
+            update_stream_playback_state(name);
+            return;
+        }
         if (media_is_ready_but_paused(current.video)) {
             current.stalled = false;
             current.resume_blocked = true;
@@ -1932,6 +1966,18 @@ function attempt_stream_resume(name) {
         mark_stream_stalled(name, "Reconnecting stream...");
         reload_stream_playback(name);
     }, 2500);
+}
+
+function resume_muted_after_blocked_audio(player) {
+    if (!player || !player.video || !player.video.paused || player.video.muted) {
+        return false;
+    }
+    audio_unlocked = false;
+    player.video.muted = true;
+    player.video.volume = 0.0;
+    update_mute_button();
+    safe_play(player.video);
+    return true;
 }
 
 function media_is_ready_but_paused(video) {
@@ -2116,6 +2162,10 @@ function set_master_volume(value) {
 }
 
 function toggle_master_mute() {
+    if (!audio_unlocked && !master_muted) {
+        unlock_audio();
+        return;
+    }
     master_muted = !master_muted;
     if (!master_muted) {
         audio_unlocked = true;
@@ -2127,9 +2177,10 @@ function toggle_master_mute() {
 }
 
 function update_mute_button() {
-    var label = master_muted ? "Unmute" : "Mute";
+    var effectively_muted = master_muted || !audio_unlocked;
+    var label = effectively_muted ? "Unmute" : "Mute";
     $("#mute_button")
-        .text(master_muted ? "\uD83D\uDD07" : "\uD83D\uDD0A")
+        .text(effectively_muted ? "\uD83D\uDD07" : "\uD83D\uDD0A")
         .attr("aria-label", label)
         .attr("title", label);
 }

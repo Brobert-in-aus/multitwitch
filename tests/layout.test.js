@@ -272,3 +272,30 @@ test("buffered paused media is not treated as a dead stream", () => {
     assert.equal(context.media_is_ready_but_paused({paused: true, error: {code: 3}, readyState: 4}), false);
     assert.equal(context.media_is_ready_but_paused({paused: false, error: null, readyState: 4}), false);
 });
+
+
+test("blocked audible autoplay falls back to uninterrupted muted playback", () => {
+    const {context} = loadApplication();
+    let playCalls = 0;
+    let muteButtonUpdates = 0;
+    const player = {
+        video: {
+            paused: true,
+            muted: false,
+            volume: 0.7,
+            play() {
+                playCalls += 1;
+                return Promise.resolve();
+            }
+        }
+    };
+    context.audio_unlocked = true;
+    context.update_mute_button = () => { muteButtonUpdates += 1; };
+
+    assert.equal(context.resume_muted_after_blocked_audio(player), true);
+    assert.equal(player.video.muted, true);
+    assert.equal(player.video.volume, 0);
+    assert.equal(context.audio_unlocked, false);
+    assert.equal(playCalls, 1);
+    assert.equal(muteButtonUpdates, 1);
+});
