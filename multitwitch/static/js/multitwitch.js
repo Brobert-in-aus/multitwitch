@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "92";
+var APP_VERSION = "93";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1786,6 +1786,14 @@ function update_stream_latency_labels() {
         if (!label.length) {
             continue;
         }
+        // Native HLS exposes no reliable live-latency signal (only hls.js does),
+        // so suppress the readout entirely rather than show a misleading number
+        // derived from the seekable range. Empty text hides it via :empty.
+        if (player && player.engine === "native") {
+            player.display_latency = null;
+            label.text("").removeAttr("title");
+            continue;
+        }
         var latency = player && !player.manual_paused ? measure_player_latency(player) : null;
         if (latency === null || !isFinite(latency)) {
             player.display_latency = null;
@@ -3544,6 +3552,7 @@ function render_followed_channels() {
         return;
     }
     var filter = $.trim($("#follow_filter").val() || "").toLowerCase();
+    hide_follow_tooltip();
     container.empty();
     if (!followed_channels.length) {
         container.append($("<div>", {"class": "empty_state"}).text("No followed channels loaded."));
@@ -3581,10 +3590,14 @@ function render_followed_channels() {
                 };
             })(login));
         }
-        container.append($("<div>", {
-            "class": "follow_item_shell",
-            title: live_follow_tooltip(live)
-        }).append(item));
+        var shell = $("<div>", {"class": "follow_item_shell"});
+        var tooltip = live_follow_tooltip(live);
+        if (tooltip) {
+            // Custom data attribute (not the native title) so our instant,
+            // delay-free hover tooltip renders it -- see initialize_follow_tooltip.
+            shell.attr("data-tooltip", tooltip);
+        }
+        container.append(shell.append(item));
         if (shown >= 80) {
             break;
         }
@@ -3606,6 +3619,71 @@ function live_follow_tooltip(live) {
         details.push("Title: " + live.title);
     }
     return details.join("\n");
+}
+
+// Followed-channel rows show their game/title on hover. We use a body-appended
+// element rather than the native `title` attribute so it appears instantly (the
+// browser's title tooltip has a built-in delay), and `position: fixed` so the
+// list's overflow:auto scroll box doesn't clip it.
+var follow_tooltip_el = null;
+
+function follow_tooltip_node() {
+    if (!follow_tooltip_el) {
+        follow_tooltip_el = document.createElement("div");
+        follow_tooltip_el.className = "hover_tooltip";
+        document.body.appendChild(follow_tooltip_el);
+    }
+    return follow_tooltip_el;
+}
+
+function show_follow_tooltip(target) {
+    var text = target.getAttribute("data-tooltip");
+    if (!text) {
+        return;
+    }
+    var node = follow_tooltip_node();
+    node.textContent = text;
+    node.style.display = "block";
+    position_follow_tooltip(target);
+}
+
+function position_follow_tooltip(target) {
+    if (!follow_tooltip_el) {
+        return;
+    }
+    var node = follow_tooltip_el;
+    var rect = target.getBoundingClientRect();
+    var margin = 8;
+    var width = node.offsetWidth;
+    var height = node.offsetHeight;
+    // The followed list lives in the sidebar; prefer placing the tooltip to the
+    // left of the row, falling back to its right when there isn't room.
+    var left = rect.left - margin - width;
+    if (left < margin) {
+        left = rect.right + margin;
+    }
+    if (left + width > window.innerWidth - margin) {
+        left = Math.max(margin, window.innerWidth - margin - width);
+    }
+    var top = rect.top + (rect.height - height) / 2;
+    top = Math.max(margin, Math.min(top, window.innerHeight - margin - height));
+    node.style.left = Math.round(left) + "px";
+    node.style.top = Math.round(top) + "px";
+}
+
+function hide_follow_tooltip() {
+    if (follow_tooltip_el) {
+        follow_tooltip_el.style.display = "none";
+    }
+}
+
+function initialize_follow_tooltip() {
+    $("#followed_channels")
+        .on("mouseenter.followtip", ".follow_item_shell", function() {
+            show_follow_tooltip(this);
+        })
+        .on("mouseleave.followtip", ".follow_item_shell", hide_follow_tooltip)
+        .on("scroll.followtip", hide_follow_tooltip);
 }
 
 function auto_check_stream_together(names) {

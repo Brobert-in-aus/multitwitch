@@ -739,6 +739,25 @@ body.chat_resizing #chatbox iframe {
     color: #fca5a5;
 }
 
+/* Instant (delay-free) hover tooltip for followed-channel rows. Appended to
+   <body> and positioned with fixed coords in JS so the followed list's
+   overflow:auto box can't clip it. */
+.hover_tooltip {
+    background: rgba(4, 8, 13, 0.96);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 4px;
+    color: #f7f7f8;
+    display: none;
+    font-size: 12px;
+    line-height: 1.35;
+    max-width: 260px;
+    padding: 6px 9px;
+    pointer-events: none;
+    position: fixed;
+    white-space: pre-line;
+    z-index: 9999;
+}
+
 #current_streams,
 #stream_together_actions,
 #stream_together_results {

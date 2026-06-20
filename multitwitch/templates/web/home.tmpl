@@ -1,4 +1,4 @@
-{% set asset_version = 92 %}
+{% set asset_version = 93 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -44,6 +44,7 @@ $(document).ready(function() {
     auto_check_stream_together(streams.slice());
     initialize_twitch();
     initialize_follow_refresh();
+    initialize_follow_tooltip();
     initialize_notifications();
 
     // Do this after all the jqueryui setup.
