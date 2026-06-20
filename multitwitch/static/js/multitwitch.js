@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "77";
+var APP_VERSION = "78";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1455,25 +1455,18 @@ function attach_hls_stream(tile, name, video, url) {
     } else if (window.Hls && Hls.isSupported()) {
         var hls = new Hls({
             // The proxy promotes Twitch's prefetch segments to real segments, so
-            // the playlist edge is genuinely live -- stay close to it.
+            // the playlist edge is genuinely live -- staying a couple of segments
+            // back is already near-native latency with a healthy startup buffer.
             liveSyncDurationCount: 2,
-            // Hard-seek back to live if a tile ever falls far behind (e.g. after a
-            // long stall); without a cap hls.js never recovers lost latency.
-            liveMaxLatencyDurationCount: 10,
-            // Gently speed up (up to 1.5x) to drift back toward live after the
-            // smaller hiccups -- muted-tab pauses, brief buffering -- instead of
-            // permanently accumulating delay.
-            maxLiveSyncPlaybackRate: 1.5,
             // A little extra nudge headroom for the thin live-edge buffer.
             nudgeMaxRetry: 5
-            // NOTE: lowLatencyMode is intentionally OFF. Twitch ships no real
-            // LL-HLS parts (#EXT-X-PART), so it gave no latency benefit -- our low
-            // latency comes from promoting prefetch segments in the proxy. What it
-            // *did* do was pin playback to the bare live edge, where the buffer is
-            // too thin to autoplay: the stream would stall, sit on "Reconnecting"
-            // and only render the first frame of each new segment until the user
-            // hit play. Without it hls.js sits ~liveSyncDurationCount behind the
-            // (already-live) edge with a healthy buffer that starts on its own.
+            // NOTE: we deliberately DON'T set maxLiveSyncPlaybackRate or
+            // liveMaxLatencyDurationCount, and leave lowLatencyMode off. Those make
+            // hls.js's latency controller actively seek/rate-adjust toward the live
+            // edge, which (a) interrupted the initial muted play() so streams sat
+            // paused until a click, and (b) fought the app's own latency-sync by
+            // yanking a deliberately-delayed tile back to live. Drift recovery is
+            // handled by the sync feature and the jump-to-live button instead.
         });
         stream_players[name].hls = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, function() {
