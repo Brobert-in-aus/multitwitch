@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "74";
+var APP_VERSION = "75";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1360,9 +1360,11 @@ function attach_hls_stream(tile, name, video, url) {
         recovery_attempt: recovery_attempt,
         recovery_timer: null,
         resume_timer: null,
+        muted_resume_timer: null,
         resume_blocked: false,
         startup_pending: true,
         startup_started_at: Date.now(),
+        startup_progress_started_at: 0,
         sync_natural_latency: null,
         last_sync_seek_at: 0
     };
@@ -1388,22 +1390,18 @@ function attach_hls_stream(tile, name, video, url) {
         .on("playing.playbackRecovery", function() {
             var player = stream_players[name];
             if (player && player.video === video) {
-                var startup_completed = player.startup_pending;
-                player.startup_pending = false;
                 player.recovering = false;
                 player.recovery_attempt = 0;
                 player.resume_blocked = false;
                 player.last_progress_at = Date.now();
                 player.last_time = video.currentTime || 0;
-                if (!player.resume_timer) {
+                if (!player.resume_timer && !player.startup_pending) {
                     player.stalled = false;
                     set_player_status(tile, "");
                 }
-                if (latency_sync_enabled && player.sync_natural_latency === null) {
+                if (!player.startup_pending && latency_sync_enabled &&
+                    player.sync_natural_latency === null) {
                     setTimeout(run_latency_sync, 250);
-                }
-                if (startup_completed) {
-                    sync_active_stream_audio();
                 }
             }
             update_stream_playback_state(name);
@@ -1411,16 +1409,22 @@ function attach_hls_stream(tile, name, video, url) {
         .on("timeupdate.playbackRecovery", function() {
             var player = stream_players[name];
             if (player && player.video === video && video.currentTime > player.last_time + 0.05) {
+                var now = Date.now();
                 player.last_time = video.currentTime;
-                player.last_progress_at = Date.now();
+                player.last_progress_at = now;
                 player.recovery_attempt = 0;
                 player.resume_blocked = false;
                 player.stalled = false;
+                if (startup_progress_is_stable(player, now)) {
+                    complete_stream_startup(name, player, tile);
+                }
                 if (player.resume_timer) {
                     clearTimeout(player.resume_timer);
                     player.resume_timer = null;
                 }
-                set_player_status(tile, "");
+                if (!player.startup_pending) {
+                    set_player_status(tile, "");
+                }
                 update_stream_playback_state(name);
             }
         })
@@ -1467,9 +1471,34 @@ function attach_hls_stream(tile, name, video, url) {
     safe_play(video);
 }
 
+function startup_progress_is_stable(player, now) {
+    if (!player || !player.startup_pending) {
+        return false;
+    }
+    if (!player.startup_progress_started_at) {
+        player.startup_progress_started_at = now;
+        return false;
+    }
+    return now - player.startup_progress_started_at >= 2000;
+}
+
+function complete_stream_startup(name, player, tile) {
+    if (!player || !player.startup_pending) {
+        return;
+    }
+    player.startup_pending = false;
+    player.stalled = false;
+    set_player_status(tile, "");
+    sync_active_stream_audio();
+    if (latency_sync_enabled && player.sync_natural_latency === null) {
+        setTimeout(run_latency_sync, 250);
+    }
+}
+
 function retry_hls_startup_play(name, hls, video) {
     var player = stream_players[name];
-    if (!player || player.hls !== hls || player.video !== video || player.manual_paused || !video.paused) {
+    if (!player || !player.startup_pending || player.hls !== hls ||
+        player.video !== video || player.manual_paused || !video.paused) {
         return;
     }
     player.resume_blocked = false;
@@ -1976,7 +2005,14 @@ function resume_muted_after_blocked_audio(player) {
     player.video.muted = true;
     player.video.volume = 0.0;
     update_mute_button();
-    safe_play(player.video);
+    if (!player.muted_resume_timer) {
+        player.muted_resume_timer = setTimeout(function() {
+            player.muted_resume_timer = null;
+            if (!player.manual_paused && player.video.paused && player.video.muted) {
+                safe_play(player.video);
+            }
+        }, 100);
+    }
     return true;
 }
 
@@ -2207,6 +2243,9 @@ function destroy_stream_player(name) {
         }
         if (player.resume_timer) {
             clearTimeout(player.resume_timer);
+        }
+        if (player.muted_resume_timer) {
+            clearTimeout(player.muted_resume_timer);
         }
         if (player.hls) {
             player.hls.destroy();

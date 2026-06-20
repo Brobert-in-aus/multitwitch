@@ -274,7 +274,7 @@ test("buffered paused media is not treated as a dead stream", () => {
 });
 
 
-test("blocked audible autoplay falls back to uninterrupted muted playback", () => {
+test("blocked audible autoplay falls back to uninterrupted muted playback", async () => {
     const {context} = loadApplication();
     let playCalls = 0;
     let muteButtonUpdates = 0;
@@ -296,6 +296,51 @@ test("blocked audible autoplay falls back to uninterrupted muted playback", () =
     assert.equal(player.video.muted, true);
     assert.equal(player.video.volume, 0);
     assert.equal(context.audio_unlocked, false);
+    await new Promise(resolve => setTimeout(resolve, 150));
     assert.equal(playCalls, 1);
     assert.equal(muteButtonUpdates, 1);
+});
+
+
+test("startup requires sustained timeline progress before becoming ready", () => {
+    const {context} = loadApplication();
+    const player = {startup_pending: true, startup_progress_started_at: 0};
+
+    assert.equal(context.startup_progress_is_stable(player, 1000), false);
+    assert.equal(player.startup_progress_started_at, 1000);
+    assert.equal(context.startup_progress_is_stable(player, 2999), false);
+    assert.equal(context.startup_progress_is_stable(player, 3000), true);
+
+    player.startup_pending = false;
+    assert.equal(context.startup_progress_is_stable(player, 5000), false);
+});
+
+
+test("buffered fragments cannot restart a player after startup", () => {
+    const {context} = loadApplication();
+    let playCalls = 0;
+    const hls = {};
+    const video = {
+        paused: true,
+        play() {
+            playCalls += 1;
+            return Promise.resolve();
+        }
+    };
+    context.stream_players.example = {
+        hls,
+        video,
+        manual_paused: false,
+        resume_blocked: true,
+        startup_pending: false
+    };
+
+    context.retry_hls_startup_play("example", hls, video);
+    assert.equal(playCalls, 0);
+    assert.equal(context.stream_players.example.resume_blocked, true);
+
+    context.stream_players.example.startup_pending = true;
+    context.retry_hls_startup_play("example", hls, video);
+    assert.equal(playCalls, 1);
+    assert.equal(context.stream_players.example.resume_blocked, false);
 });
