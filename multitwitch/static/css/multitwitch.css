@@ -227,8 +227,9 @@ iframe {
     display: none;
 }
 
-/* Per-stream audio control (Shift-click). Hidden until the stream has its own
-   audio; then pinned bottom-center, above the drag hitbox so it's adjustable. */
+/* Per-stream audio control (Shift-click). Pinned bottom-center, above the drag
+   hitbox so it's adjustable. Like the other tile controls it's only revealed on
+   hover (or tap on touch / focus for keyboard), even once the stream has audio. */
 .stream_audio {
     align-items: center;
     background: rgba(4, 8, 13, 0.88);
@@ -243,7 +244,9 @@ iframe {
     z-index: 4;
 }
 
-.stream.has_audio .stream_audio {
+.stream.has_audio:hover .stream_audio,
+.stream.has_audio.controls_visible .stream_audio,
+.stream.has_audio .stream_audio:focus-within {
     display: flex;
 }
 
