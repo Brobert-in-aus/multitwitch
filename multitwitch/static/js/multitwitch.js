@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "75";
+var APP_VERSION = "76";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
