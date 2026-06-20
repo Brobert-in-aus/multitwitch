@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "79";
+var APP_VERSION = "80";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1923,10 +1923,34 @@ function page_active() {
     return !document.hidden;
 }
 
-// Coming back to the foreground: just nudge paused players back to play and
-// reset stall tracking so the background gap isn't mistaken for a freeze. hls.js
-// catches up to the live edge on its own -- no seeking or reloading, so a brief
-// glance away doesn't trigger a buffer/reload.
+// Restart the loader from the live edge and seek the playback head up to it.
+// Used after the player has fallen behind (tab/window backgrounded, manual
+// jump-to-live) -- a no-op when already at the edge.
+function snap_player_to_live(player) {
+    if (!player || !player.video) {
+        return;
+    }
+    try {
+        if (player.hls && typeof player.hls.startLoad === "function") {
+            player.hls.startLoad(-1);
+        }
+    } catch (e) {}
+    try {
+        var video = player.video;
+        if (video.seekable && video.seekable.length) {
+            var live_edge = video.seekable.end(video.seekable.length - 1);
+            if (live_edge - (video.currentTime || 0) > 0.5) {
+                video.currentTime = Math.max(0, live_edge - 0.5);
+            }
+        }
+    } catch (e) {}
+}
+
+// Coming back to the foreground: nudge paused players back to play and reset
+// stall tracking so the background gap isn't mistaken for a freeze. Browsers
+// pause muted background video, so on return the players are stuck wherever they
+// were -- snap them back to live (unless the user is actively syncing streams,
+// where the sync pass realigns them instead).
 function resume_all_after_inactive() {
     if (!page_active()) {
         return;
@@ -1942,6 +1966,9 @@ function resume_all_after_inactive() {
         player.last_time = player.video.currentTime || 0;
         player.last_progress_at = Date.now();
         player.resume_blocked = false;
+        if (!latency_sync_enabled) {
+            snap_player_to_live(player);
+        }
         if (player.video.paused) {
             safe_play(player.video);
         }
@@ -2158,17 +2185,7 @@ function sync_to_live(name, event) {
     var video = player.video;
     player.manual_paused = false;
     player.recovering = false;
-    try {
-        if (player.hls && typeof player.hls.startLoad === "function") {
-            player.hls.startLoad(-1);
-        }
-        if (video.seekable && video.seekable.length) {
-            var live_edge = video.seekable.end(video.seekable.length - 1);
-            if (live_edge - (video.currentTime || 0) > 0.5) {
-                video.currentTime = Math.max(0, live_edge - 0.5);
-            }
-        }
-    } catch (e) {}
+    snap_player_to_live(player);
     safe_play(video);
     update_stream_playback_state(name);
 }

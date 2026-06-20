@@ -127,7 +127,7 @@ class HlsProxyTests(unittest.TestCase):
         self.assertIn('URI="https://aps23.playlist.ttvnw.net/v1/playlist/init.mp4"', result[7])
         self.assertEqual(result[9], 'https://aps23.playlist.ttvnw.net/v1/playlist/seg-2.ts')
 
-    def test_rewrite_promotes_only_first_twitch_prefetch_segment(self):
+    def test_rewrite_promotes_all_twitch_prefetch_segments(self):
         base = 'https://aps23.playlist.ttvnw.net/v1/playlist/abc.m3u8'
         body = '\n'.join([
             '#EXTM3U',
@@ -140,16 +140,15 @@ class HlsProxyTests(unittest.TestCase):
 
         result = direct._rewrite_playlist(body, base).split('\n')
 
-        # The first prefetch becomes a normal EXTINF segment (duration carried
-        # over from the preceding regular segment) so hls.js plays near the edge.
-        # The newest prefetch is dropped -- it may be mid-write -- which leaves a
-        # segment of headroom for lag spikes.
+        # Every prefetch becomes a normal EXTINF segment (duration carried over
+        # from the preceding regular segment) so hls.js reaches the true edge.
         self.assertNotIn('#EXT-X-TWITCH-PREFETCH', '\n'.join(result))
         self.assertEqual(result[2], '#EXTINF:2.000,')
         self.assertEqual(result[3], 'https://cdn.hls.ttvnw.net/seg-1.ts')
         self.assertEqual(result[4], '#EXTINF:2.000,')
         self.assertEqual(result[5], 'https://cdn.hls.ttvnw.net/seg-2.ts')
-        self.assertNotIn('https://cdn.hls.ttvnw.net/seg-3.ts', '\n'.join(result))
+        self.assertEqual(result[6], '#EXTINF:2.000,')
+        self.assertEqual(result[7], 'https://cdn.hls.ttvnw.net/seg-3.ts')
 
     def test_missing_or_disallowed_url_returns_400(self):
         missing = direct.hls_proxy(SimpleNamespace(params={}))
