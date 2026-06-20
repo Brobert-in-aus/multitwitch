@@ -178,6 +178,30 @@ Every push to master builds and publishes the image, updates the production
 Compose stack, validates Caddy, and reloads the shared proxy. Pushes to master
 should therefore be treated as production deployments.
 
+Production operations
+~~~~~~~~~~~~~~~~~~~~~
+
+Litestream 0.5 may repeatedly log messages similar to:
+
+    timeout waiting for db initialization ... database may have corrupted
+    local state or blocked transactions; try removing -litestream directory
+
+These warnings were observed while the application and ``/healthz`` remained
+healthy, so they do not by themselves mean that the session database is
+unavailable. They do mean that Litestream compaction or replication health has
+not been established and should be investigated separately from application
+health. Check the container logs and confirm current snapshots in the B2
+``multistream`` replica before relying on it for recovery.
+
+Do not follow Litestream's suggestion to remove its local ``-litestream`` state
+without first stopping the service, copying the named volume, and verifying the
+remote replica. The same volume contains ``multistream.sqlite3``, which stores
+Twitch OAuth sessions.
+
+The current 1 GB VPS also has a persistent 2 GB ``/swapfile`` with
+``vm.swappiness=10``. This prevents Docker image pulls from pushing the host
+into memory-reclaim thrashing during deployment.
+
 
 Known limitations
 -----------------
