@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "80";
+var APP_VERSION = "81";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1966,10 +1966,14 @@ function resume_all_after_inactive() {
         player.last_time = player.video.currentTime || 0;
         player.last_progress_at = Date.now();
         player.resume_blocked = false;
-        if (!latency_sync_enabled) {
-            snap_player_to_live(player);
-        }
+        // Only the players the browser actually paused in the background (muted
+        // video) need recovering. A stream with audio keeps playing while we're
+        // away, so it stays near live -- snapping it would restart its loader and
+        // stall it. Leave playing streams alone.
         if (player.video.paused) {
+            if (!latency_sync_enabled) {
+                snap_player_to_live(player);
+            }
             safe_play(player.video);
         }
     }
