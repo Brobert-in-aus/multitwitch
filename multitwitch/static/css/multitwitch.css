@@ -201,6 +201,32 @@ iframe {
     border-color: #22d3ee;
 }
 
+/* Live delay readout, revealed with the controls (hover / tapped). Sits just
+   below the pause + jump-to-live buttons. */
+.stream_latency {
+    background: rgba(4, 8, 13, 0.88);
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    color: #d9e2ef;
+    display: none;
+    font-size: 11px;
+    line-height: 1;
+    padding: 4px 7px;
+    position: absolute;
+    right: 8px;
+    top: 46px;
+    white-space: nowrap;
+    z-index: 4;
+}
+
+.stream:hover .stream_latency,
+.stream.controls_visible .stream_latency {
+    display: block;
+}
+
+.stream_latency:empty {
+    display: none;
+}
+
 /* Per-stream audio control (Shift-click). Hidden until the stream has its own
    audio; then pinned bottom-center, above the drag hitbox so it's adjustable. */
 .stream_audio {

@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "84";
+var APP_VERSION = "85";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -62,12 +62,6 @@ var LATENCY_SYNC_HARD_THRESHOLD = 0.75;
 // about as tight as is meaningful.
 var LATENCY_SYNC_SOFT_THRESHOLD = 1.0;
 var LATENCY_SYNC_MIN_TOLERANCE = 0.5;
-// hls.js can begin playback well behind the live edge (e.g. when the playlist
-// reports a long target duration). If a freshly started stream settles more than
-// LIVE_START_TRIM_BEHIND seconds back, jump it to LIVE_START_TARGET_BEHIND so a
-// hard refresh lands near live instead of deep in the DVR window.
-var LIVE_START_TRIM_BEHIND = 8;
-var LIVE_START_TARGET_BEHIND = 4;
 var latency_sync_enabled = false;
 var latency_sync_extra_delay = load_saved_latency_sync_delay();
 var latency_sync_tolerance = load_saved_latency_sync_tolerance();
@@ -747,6 +741,9 @@ function initialize_stream_players() {
 
 function create_stream_player(tile) {
     var name = tile.attr("data-stream");
+    if (tile.find(".stream_latency").length === 0) {
+        $("<div>", {"class": "stream_latency", "aria-hidden": "true"}).appendTo(tile);
+    }
     tile.find(".stream_hitbox").off("click.stream keydown.stream")
         .on("click.stream", function(e) {
             if (stream_dragging) {
@@ -875,9 +872,12 @@ function initialize_audio_settings() {
         }
     } catch (e) {}
 
-    // A saved unmuted state records a previous user gesture. Restore that intent
-    // so the active stream can be unmuted after its muted autoplay has started.
-    audio_unlocked = !master_muted && master_volume > 0;
+    // Browsers require a user gesture in THIS page load before audio can play;
+    // a previous session's gesture doesn't carry over. Start locked so streams
+    // autoplay muted and the first click/keypress reliably unmutes the active
+    // stream. (Pre-unlocking from saved state made unlock_audio a no-op on that
+    // first click, so it stayed silent until some later interaction.)
+    audio_unlocked = false;
     update_volume_display();
     update_mute_button();
 }
@@ -1477,17 +1477,19 @@ function attach_hls_stream(tile, name, video, url) {
     if (stream_force_native_hls[name] && native_hls_supported) {
         video.src = url;
     } else if (window.Hls && Hls.isSupported()) {
-        // Original, known-good startup config. The latency win comes entirely
-        // from the proxy promoting Twitch's prefetch segments (so this 3-segment
-        // sync window now sits behind a genuinely-live edge). A thinner window
-        // stopped streams autoplaying -- they tried to start before enough was
-        // buffered and never recovered without a click. We deliberately do NOT
-        // set maxLiveSyncPlaybackRate / liveMaxLatencyDurationCount: those drove
-        // hls.js's latency controller to actively seek and fight the app's own
-        // latency-sync feature.
+        // Start ~4s behind the (prefetch-promoted, genuinely-live) edge. We use
+        // liveSyncDuration in seconds rather than a segment count because Twitch
+        // can report a large target duration; with lowLatencyMode on, hls.js
+        // derived its hold-back from 3x that and started ~18s back. An absolute
+        // value pins the start near live regardless. lowLatencyMode is off (it
+        // gave no benefit for Twitch's non-standard prefetch and drove the
+        // latency controller to seek/fight the app's own sync); we also avoid
+        // maxLiveSyncPlaybackRate / liveMaxLatencyDurationCount for the same
+        // reason. The earlier "needs a click to start" was an autoplay-blocker
+        // browser extension, not this config.
         var hls = new Hls({
-            liveSyncDurationCount: 3,
-            lowLatencyMode: true
+            liveSyncDuration: 4,
+            nudgeMaxRetry: 5
         });
         stream_players[name].hls = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, function() {
@@ -1538,29 +1540,10 @@ function complete_stream_startup(name, player, tile) {
     player.startup_pending = false;
     player.stalled = false;
     set_player_status(tile, "");
-    trim_started_stream_to_live(player);
     sync_active_stream_audio();
     if (latency_sync_enabled && player.sync_natural_latency === null) {
         setTimeout(run_latency_sync, 250);
     }
-}
-
-// If a freshly started stream is sitting far behind live, jump it up to
-// LIVE_START_TARGET_BEHIND -- keeping a buffer cushion -- so a hard refresh lands
-// near live. Leaves it alone when latency sync is driving placement.
-function trim_started_stream_to_live(player) {
-    if (latency_sync_enabled || !player || !player.video) {
-        return;
-    }
-    try {
-        var video = player.video;
-        if (video.seekable && video.seekable.length) {
-            var edge = video.seekable.end(video.seekable.length - 1);
-            if (edge - (video.currentTime || 0) > LIVE_START_TRIM_BEHIND) {
-                video.currentTime = Math.max(0, edge - LIVE_START_TARGET_BEHIND);
-            }
-        }
-    } catch (e) {}
 }
 
 function retry_hls_startup_play(name, hls, video) {
@@ -1681,6 +1664,32 @@ function initialize_playback_recovery() {
     });
     $(window).on("focus.playbackRecovery pageshow.playbackRecovery", resume_all_after_inactive);
     setInterval(ensure_all_streams_playing, 5000);
+    setInterval(update_stream_latency_labels, 1000);
+}
+
+// Refresh each tile's "behind live" readout (revealed on hover). Lightly smoothed
+// so the per-segment sawtooth in the raw measurement doesn't make it flicker.
+function update_stream_latency_labels() {
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        var label = stream_tile_by_name(name).find(".stream_latency");
+        if (!label.length) {
+            continue;
+        }
+        var latency = player && !player.manual_paused ? measure_player_latency(player) : null;
+        if (latency === null || !isFinite(latency)) {
+            player.display_latency = null;
+            label.text("").removeAttr("title");
+            continue;
+        }
+        player.display_latency = player.display_latency == null
+            ? latency
+            : player.display_latency * 0.5 + latency * 0.5;
+        label.text(player.display_latency.toFixed(1) + "s").attr("title", "Delay behind live");
+    }
 }
 
 function load_saved_latency_sync_delay() {
