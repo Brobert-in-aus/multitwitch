@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "88";
+var APP_VERSION = "90";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1116,10 +1116,10 @@ function sync_active_stream_audio() {
             var player = stream_players[name];
             tile.attr("data-muted", target.muted ? "true" : "false");
             if (player.manual_paused) {
-                player.video.muted = target.muted;
+                set_video_muted(player.video, target.muted);
                 player.video.volume = target.muted ? 0.0 : target.volume;
             } else if (player.startup_pending && target.muted) {
-                player.video.muted = true;
+                set_video_muted(player.video, true);
                 player.video.volume = 0.0;
                 safe_play(player.video);
             } else {
@@ -1189,7 +1189,6 @@ function direct_player_element(name) {
     return $("<video>", {
         "class": "direct_player",
         autoplay: true,
-        muted: true,
         playsinline: true,
         preload: "auto",
         "data-stream": name
@@ -1377,10 +1376,11 @@ function hls_proxy_url(url) {
 function attach_hls_stream(tile, name, video, url) {
     var recovery_attempt = stream_players[name] ? stream_players[name].recovery_attempt : 0;
     destroy_stream_player(name);
-    // Give a saved unmuted state a chance to resume automatically. Browsers
-    // that disallow it reject play(), and safe_play() immediately retries muted.
+    // Set both the live mute flag and its reflected default before attaching a
+    // source. Leaving the element's original `muted` attribute behind allowed
+    // Edge to reset an optimistic audible restore back to muted during attach.
     var initial_audio = stream_audio_target(name);
-    video.muted = initial_audio.muted;
+    set_video_muted(video, initial_audio.muted);
     video.volume = initial_audio.muted ? 0.0 : initial_audio.volume;
     stream_players[name] = {
         video: video,
@@ -2193,7 +2193,7 @@ function ensure_stream_playing(name) {
     }
     if (player.startup_pending && now - player.startup_started_at < 20000) {
         if (player.video.paused && player.video.readyState >= 2) {
-            player.video.muted = true;
+            set_video_muted(player.video, true);
             player.video.volume = 0.0;
             safe_play(player.video);
         }
@@ -2280,7 +2280,7 @@ function resume_muted_after_blocked_audio(player) {
         return false;
     }
     audio_unlocked = false;
-    player.video.muted = true;
+    set_video_muted(player.video, true);
     player.video.volume = 0.0;
     update_mute_button();
     if (!player.muted_resume_timer) {
@@ -2418,7 +2418,7 @@ function safe_play(video) {
                 if (audio_restore_pending && !video.muted && error && error.name === "NotAllowedError") {
                     audio_restore_pending = false;
                     audio_unlocked = false;
-                    video.muted = true;
+                    set_video_muted(video, true);
                     video.volume = 0.0;
                     update_mute_button();
                     sync_active_stream_audio();
@@ -2428,32 +2428,47 @@ function safe_play(video) {
     } catch (e) {}
 }
 
+function set_video_muted(video, muted) {
+    muted = !!muted;
+    // defaultMuted mirrors the HTML `muted` attribute. Keep it aligned with the
+    // current property so Edge cannot restore a stale default on source attach.
+    video.defaultMuted = muted;
+    if (muted) {
+        if (video.setAttribute) {
+            video.setAttribute("muted", "");
+        }
+    } else if (video.removeAttribute) {
+        video.removeAttribute("muted");
+    }
+    video.muted = muted;
+}
+
 function apply_video_audio(video, unmuted, volume) {
     if (volume === undefined) {
         volume = master_volume;
     }
     if (!unmuted) {
-        video.muted = true;
+        set_video_muted(video, true);
         video.volume = 0.0;
         safe_play(video);
         return;
     }
     video.volume = volume;
     if (video.paused) {
-        video.muted = true;
+        set_video_muted(video, true);
         try {
             var play_promise = video.play();
             if (play_promise && play_promise.then) {
                 play_promise.then(function() {
                     video.volume = volume;
-                    video.muted = false;
+                    set_video_muted(video, false);
                 }).catch(function() {});
             } else {
-                video.muted = false;
+                set_video_muted(video, false);
             }
         } catch (e) {}
     } else {
-        video.muted = false;
+        set_video_muted(video, false);
         safe_play(video);
     }
 }

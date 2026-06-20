@@ -302,6 +302,28 @@ test("saved unmuted audio is eligible for autoplay restoration", () => {
 });
 
 
+test("audible restore clears the element's persistent muted default", () => {
+    const {context} = loadApplication();
+    const attributes = new Set(["muted"]);
+    const video = {
+        muted: true,
+        defaultMuted: true,
+        setAttribute(name) { attributes.add(name); },
+        removeAttribute(name) { attributes.delete(name); }
+    };
+
+    context.set_video_muted(video, false);
+    assert.equal(video.muted, false);
+    assert.equal(video.defaultMuted, false);
+    assert.equal(attributes.has("muted"), false);
+
+    context.set_video_muted(video, true);
+    assert.equal(video.muted, true);
+    assert.equal(video.defaultMuted, true);
+    assert.equal(attributes.has("muted"), true);
+});
+
+
 test("autoplay rejection only relocks an optimistic refresh restore", async () => {
     const {context} = loadApplication();
     const blocked = new Error("Autoplay blocked");
@@ -320,6 +342,7 @@ test("autoplay rejection only relocks an optimistic refresh restore", async () =
     await new Promise(resolve => setTimeout(resolve, 0));
     assert.equal(context.audio_unlocked, false);
     assert.equal(video.muted, true);
+    assert.equal(video.defaultMuted, true);
 
     video.muted = false;
     context.audio_unlocked = true;
