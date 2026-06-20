@@ -279,6 +279,78 @@ test("hls diagnostics retain useful failure data without URL tokens", () => {
 });
 
 
+test("hls diagnostics redact URLs embedded in parser reasons", () => {
+    const {context} = loadApplication();
+    const diagnostics = context.hls_error_diagnostics("example", {
+        reason: "media sequence mismatch 993: https://cdn.ttvnw.net/v1/segment/private.mp4?token=secret\n" +
+            "#EXT-X-MAP:URI=\"https://cdn.ttvnw.net/v1/segment/init.mp4?dna=secret\"",
+        response: {text: "https://cdn.ttvnw.net/v1/segment/response.mp4?sig=secret"}
+    });
+
+    assert.match(diagnostics.reason, /media sequence mismatch 993/);
+    assert.match(diagnostics.reason, /https:\/\/cdn\.ttvnw\.net\/\[redacted\]\.mp4/);
+    assert.doesNotMatch(diagnostics.reason, /secret|\/v1\/segment\//);
+    assert.doesNotMatch(diagnostics.response_text, /secret|\/v1\/segment\//);
+});
+
+
+test("saved unmuted audio is eligible for autoplay restoration", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.saved_audio_should_start_unlocked(false), true);
+    assert.equal(context.saved_audio_should_start_unlocked(true), false);
+});
+
+
+test("autoplay rejection only relocks an optimistic refresh restore", async () => {
+    const {context} = loadApplication();
+    const blocked = new Error("Autoplay blocked");
+    blocked.name = "NotAllowedError";
+    const video = {
+        muted: false,
+        volume: 0.7,
+        play() { return Promise.reject(blocked); }
+    };
+    context.update_mute_button = () => {};
+    context.sync_active_stream_audio = () => {};
+    context.audio_unlocked = true;
+    context.audio_restore_pending = true;
+
+    context.safe_play(video);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(context.audio_unlocked, false);
+    assert.equal(video.muted, true);
+
+    video.muted = false;
+    context.audio_unlocked = true;
+    context.audio_restore_pending = false;
+    context.safe_play(video);
+    await new Promise(resolve => setTimeout(resolve, 0));
+    assert.equal(context.audio_unlocked, true);
+    assert.equal(video.muted, false);
+});
+
+
+test("follow detection is case-insensitive", () => {
+    const {context} = loadApplication();
+    context.followed_channels = [{broadcaster_login: "LilAggy"}];
+
+    assert.equal(context.is_followed_channel("lilaggy"), true);
+    assert.equal(context.is_followed_channel("another_stream"), false);
+});
+
+
+test("live follow tooltip includes the game and stream title", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.live_follow_tooltip({
+        game_name: "Dark Souls III",
+        title: "No-hit attempts"
+    }), "Game: Dark Souls III\nTitle: No-hit attempts");
+    assert.equal(context.live_follow_tooltip(null), "");
+});
+
+
 test("stream API diagnostics identify failures before hls.js starts", () => {
     const {context} = loadApplication();
 

@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "86";
+var APP_VERSION = "88";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -25,6 +25,7 @@ var main_size_fractions = {
 var main_size_fraction = main_size_fractions["focus-one"];
 var active_border_timer = null;
 var audio_unlocked = false;  // browsers block autoplay-with-sound until a gesture
+var audio_restore_pending = false;
 var master_volume = 0.70;
 var master_muted = true;
 // Per-stream audio added via Shift-click: name -> {on, volume, follows_master}.
@@ -71,6 +72,8 @@ var latency_sync_base_latency = null;
 var latency_sync_timer = null;
 var twitch_user = null;
 var followed_channels = [];
+var followed_channels_loaded = false;
+var follow_refresh_pending = false;
 var twitch_live_channels = {};
 var stream_metadata = {};
 var stream_together_checked = {};
@@ -727,6 +730,10 @@ function next_stream_tile_id() {
 
 function initialize_stream_players() {
     stream_tile_counter = $("#streams .stream").length;
+    var saved_active = load_saved_active_stream();
+    active_stream = (saved_active && streams.indexOf(saved_active) != -1)
+        ? saved_active
+        : (streams.length ? streams[0] : null);
     $("#streams .stream").each(function() {
         var tile = $(this);
         if (!tile.attr("id")) {
@@ -734,10 +741,6 @@ function initialize_stream_players() {
         }
         create_stream_player(tile);
     });
-    var saved_active = load_saved_active_stream();
-    active_stream = (saved_active && streams.indexOf(saved_active) != -1)
-        ? saved_active
-        : (streams.length ? streams[0] : null);
     sync_active_stream_audio();
 }
 
@@ -874,14 +877,18 @@ function initialize_audio_settings() {
         }
     } catch (e) {}
 
-    // Browsers require a user gesture in THIS page load before audio can play;
-    // a previous session's gesture doesn't carry over. Start locked so streams
-    // autoplay muted and the first click/keypress reliably unmutes the active
-    // stream. (Pre-unlocking from saved state made unlock_audio a no-op on that
-    // first click, so it stayed silent until some later interaction.)
-    audio_unlocked = false;
+    // Restore an explicitly unmuted saved state and let the browser decide
+    // whether sound autoplay is permitted for this origin. safe_play() falls
+    // back to muted playback and re-locks audio on NotAllowedError, preserving
+    // the first-click unlock path in stricter browsers.
+    audio_unlocked = saved_audio_should_start_unlocked(master_muted);
+    audio_restore_pending = audio_unlocked;
     update_volume_display();
     update_mute_button();
+}
+
+function saved_audio_should_start_unlocked(saved_muted) {
+    return !saved_muted;
 }
 
 function persist_audio_settings() {
@@ -949,6 +956,7 @@ function save_active_stream(name) {
 }
 
 function unlock_audio() {
+    audio_restore_pending = false;
     if (audio_unlocked) {
         return;
     }
@@ -1110,7 +1118,7 @@ function sync_active_stream_audio() {
             if (player.manual_paused) {
                 player.video.muted = target.muted;
                 player.video.volume = target.muted ? 0.0 : target.volume;
-            } else if (player.startup_pending) {
+            } else if (player.startup_pending && target.muted) {
                 player.video.muted = true;
                 player.video.volume = 0.0;
                 safe_play(player.video);
@@ -1369,10 +1377,11 @@ function hls_proxy_url(url) {
 function attach_hls_stream(tile, name, video, url) {
     var recovery_attempt = stream_players[name] ? stream_players[name].recovery_attempt : 0;
     destroy_stream_player(name);
-    // Establish muted autoplay before attaching a source. Saved audio state is
-    // restored only after the browser confirms playback with `playing`.
-    video.muted = true;
-    video.volume = 0.0;
+    // Give a saved unmuted state a chance to resume automatically. Browsers
+    // that disallow it reject play(), and safe_play() immediately retries muted.
+    var initial_audio = stream_audio_target(name);
+    video.muted = initial_audio.muted;
+    video.volume = initial_audio.muted ? 0.0 : initial_audio.volume;
     stream_players[name] = {
         video: video,
         hls: null,
@@ -1418,6 +1427,9 @@ function attach_hls_stream(tile, name, video, url) {
         .on("playing.playbackRecovery", function() {
             var player = stream_players[name];
             if (player && player.video === video) {
+                if (!video.muted) {
+                    audio_restore_pending = false;
+                }
                 player.recovering = false;
                 player.recovery_attempt = 0;
                 player.hls_recover_attempt = 0;
@@ -1658,11 +1670,20 @@ function hls_error_diagnostics(name, data) {
         channel: name,
         type: data.type || null,
         details: data.details || null,
-        reason: data.reason || null,
+        reason: sanitize_hls_text(data.reason, 1000),
         response_code: response.code || response.status || null,
-        response_text: response.text ? String(response.text).slice(0, 200) : null,
+        response_text: sanitize_hls_text(response.text, 200),
         url: sanitize_playback_url(data.url || response.url || context.url || frag.url)
     };
+}
+
+function sanitize_hls_text(value, limit) {
+    if (!value) {
+        return null;
+    }
+    return String(value).replace(/https?:\/\/[^\s"']+/g, function(url) {
+        return sanitize_playback_url(url);
+    }).slice(0, limit);
 }
 
 function log_fatal_hls_error(name, data) {
@@ -2393,7 +2414,16 @@ function safe_play(video) {
     try {
         var play_promise = video.play();
         if (play_promise && play_promise.catch) {
-            play_promise.catch(function() {});
+            play_promise.catch(function(error) {
+                if (audio_restore_pending && !video.muted && error && error.name === "NotAllowedError") {
+                    audio_restore_pending = false;
+                    audio_unlocked = false;
+                    video.muted = true;
+                    video.volume = 0.0;
+                    update_mute_button();
+                    sync_active_stream_audio();
+                }
+            });
         }
     } catch (e) {}
 }
@@ -2434,6 +2464,7 @@ function set_master_volume(value) {
         return;
     }
     pct = Math.max(0, Math.min(100, pct));
+    audio_restore_pending = false;
     audio_unlocked = true;
     master_volume = pct / 100;
     master_muted = pct == 0;
@@ -2445,6 +2476,7 @@ function set_master_volume(value) {
 }
 
 function toggle_master_mute() {
+    audio_restore_pending = false;
     if (!audio_unlocked && !master_muted) {
         unlock_audio();
         return;
@@ -2744,15 +2776,27 @@ function render_current_streams() {
         var name = streams[i];
         // Click the name to make it the active audio stream; X removes it.
         // (The "Together" button is omitted while Stream Together is pinned.)
-        list.append(
-            $("<div>", {"class": "current_stream"})
+        var row = $("<div>", {"class": "current_stream"})
                 .toggleClass("is_active", name == active_stream)
                 .append($("<span>", {"class": "current_stream_name"}).text(name).click((function(stream_name) {
                     return function() {
                         set_active_stream(stream_name);
                     };
-                })(name)))
-                .append($("<button>", {
+                })(name)));
+        if (twitch_user && followed_channels_loaded && !is_followed_channel(name)) {
+            row.append($("<button>", {
+                type: "button",
+                "class": "follow_stream",
+                "aria-label": "Follow " + name + " on Twitch",
+                title: "Follow on Twitch",
+                text: "+ Follow"
+            }).click((function(stream_name) {
+                return function() {
+                    open_follow_on_twitch(stream_name);
+                };
+            })(name)));
+        }
+        row.append($("<button>", {
                     type: "button",
                     "class": "remove_stream",
                     "aria-label": "Remove " + name,
@@ -2762,9 +2806,36 @@ function render_current_streams() {
                     return function() {
                         remove_stream(stream_name);
                     };
-                })(name)))
-        );
+                })(name)));
+        list.append(row);
     }
+}
+
+function is_followed_channel(name) {
+    var login = String(name || "").toLowerCase();
+    for (var i = 0; i < followed_channels.length; i++) {
+        if (String(followed_channels[i].broadcaster_login || "").toLowerCase() === login) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function open_follow_on_twitch(name) {
+    if (!/^[A-Za-z0-9_]{1,25}$/.test(name || "")) {
+        return;
+    }
+    follow_refresh_pending = true;
+    window.open("https://www.twitch.tv/" + encodeURIComponent(name), "_blank", "noopener,noreferrer");
+}
+
+function initialize_follow_refresh() {
+    window.addEventListener("focus", function() {
+        if (follow_refresh_pending && twitch_user) {
+            follow_refresh_pending = false;
+            load_followed_channels();
+        }
+    });
 }
 
 function render_stream_together_actions() {
@@ -3147,6 +3218,8 @@ function initialize_twitch() {
             $("#twitch_connect_button").prop("disabled", false);
             if (!data.connected) {
                 twitch_user = null;
+                followed_channels_loaded = false;
+                render_current_streams();
                 set_twitch_state("Offline", "offline");
                 $("#twitch_disconnect_button").hide();
                 set_twitch_hint(data.message || "Connect Twitch to load followed channels.");
@@ -3210,6 +3283,7 @@ function disconnect_twitch() {
         complete: function() {
             twitch_user = null;
             followed_channels = [];
+            followed_channels_loaded = false;
             twitch_live_channels = {};
             $("#followed_channels").empty();
             $("#twitch_disconnect_button").hide();
@@ -3218,6 +3292,7 @@ function disconnect_twitch() {
             stop_go_live_polling();
             notify_seeded = false;
             notify_seen_live = {};
+            render_current_streams();
         }
     });
 }
@@ -3400,6 +3475,7 @@ function load_followed_channels() {
         return;
     }
     followed_channels = [];
+    followed_channels_loaded = false;
     twitch_live_channels = {};
     set_twitch_hint("Loading followed channels...");
     load_followed_page(null);
@@ -3415,6 +3491,7 @@ function load_followed_page(cursor) {
         if (data.pagination && data.pagination.cursor && followed_channels.length < 1000) {
             load_followed_page(data.pagination.cursor);
         } else {
+            followed_channels_loaded = true;
             load_followed_live_streams();
         }
     });
@@ -3428,6 +3505,7 @@ function load_followed_live_streams() {
             stream_metadata[live[i].user_login.toLowerCase()] = live[i];
         }
         render_followed_channels();
+        render_current_streams();
         update_all_stream_tile_metadata();
         set_twitch_hint("Loaded " + followed_channels.length + " followed channels.");
     });
@@ -3476,7 +3554,10 @@ function render_followed_channels() {
                 };
             })(login));
         }
-        container.append(item);
+        container.append($("<div>", {
+            "class": "follow_item_shell",
+            title: live_follow_tooltip(live)
+        }).append(item));
         if (shown >= 80) {
             break;
         }
@@ -3484,6 +3565,20 @@ function render_followed_channels() {
     if (!shown) {
         container.append($("<div>", {"class": "empty_state"}).text("No matches."));
     }
+}
+
+function live_follow_tooltip(live) {
+    if (!live) {
+        return "";
+    }
+    var details = [];
+    if (live.game_name) {
+        details.push("Game: " + live.game_name);
+    }
+    if (live.title) {
+        details.push("Title: " + live.title);
+    }
+    return details.join("\n");
 }
 
 function auto_check_stream_together(names) {

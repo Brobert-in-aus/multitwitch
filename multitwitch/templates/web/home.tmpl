@@ -1,4 +1,4 @@
-{% set asset_version = 86 %}
+{% set asset_version = 88 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -43,6 +43,7 @@ $(document).ready(function() {
     render_stream_together_actions();
     auto_check_stream_together(streams.slice());
     initialize_twitch();
+    initialize_follow_refresh();
     initialize_notifications();
 
     // Do this after all the jqueryui setup.
@@ -117,6 +118,31 @@ $(window).resize(function() {
         </div>
     </div>
 
+    <div class="panel_section">
+        <div class="section_header">
+            <span>Layout</span>
+            <span id="layout_state">Grid</span>
+        </div>
+        <div class="segmented_control">
+            <button type="button" onclick="set_layout_mode('grid')" data-layout-button="grid">Grid</button>
+            <button type="button" onclick="set_layout_mode('focus-one')" data-layout-button="focus-one">1 Main</button>
+            <button type="button" onclick="set_layout_mode('focus-two')" data-layout-button="focus-two">2 Wide</button>
+            <button type="button" onclick="set_layout_mode('focus-two-vertical')" data-layout-button="focus-two-vertical">2 Stack</button>
+        </div>
+        <div id="main_size_row" class="slider_row inactive">
+            <div class="slider_label">
+                <span>Main size</span>
+                <span id="main_size_value">70%</span>
+            </div>
+            <input type="range" id="main_size_slider" min="0" max="100" value="70" aria-label="Main stream size" oninput="set_main_size(this.value)" />
+        </div>
+        <button type="button" class="panel_button" onclick="toggle_theater_mode()">Theater mode</button>
+        <label class="option_toggle">
+            <input type="checkbox" id="theater_chat_toggle" checked="checked" onchange="sync_theater_mode()" />
+            <span>Keep chat in theater</span>
+        </label>
+    </div>
+
     <div class="panel_section is_collapsed" id="latency_sync_panel">
         <button type="button" class="section_header collapsible_header" id="latency_sync_toggle" aria-expanded="false" aria-controls="latency_sync_body" onclick="toggle_panel_collapsed('latency_sync_panel')">
             <span>Stream sync <span class="experimental_tag">Experimental</span></span>
@@ -142,31 +168,6 @@ $(window).resize(function() {
                 <input type="range" id="latency_sync_tolerance_slider" min="0.5" max="3" step="0.1" value="1.0" aria-label="Sync tolerance: how far apart still counts as synced" oninput="set_latency_sync_tolerance(this.value)" />
             </div>
         </div>
-    </div>
-
-    <div class="panel_section">
-        <div class="section_header">
-            <span>Layout</span>
-            <span id="layout_state">Grid</span>
-        </div>
-        <div class="segmented_control">
-            <button type="button" onclick="set_layout_mode('grid')" data-layout-button="grid">Grid</button>
-            <button type="button" onclick="set_layout_mode('focus-one')" data-layout-button="focus-one">1 Main</button>
-            <button type="button" onclick="set_layout_mode('focus-two')" data-layout-button="focus-two">2 Wide</button>
-            <button type="button" onclick="set_layout_mode('focus-two-vertical')" data-layout-button="focus-two-vertical">2 Stack</button>
-        </div>
-        <div id="main_size_row" class="slider_row inactive">
-            <div class="slider_label">
-                <span>Main size</span>
-                <span id="main_size_value">70%</span>
-            </div>
-            <input type="range" id="main_size_slider" min="0" max="100" value="70" aria-label="Main stream size" oninput="set_main_size(this.value)" />
-        </div>
-        <button type="button" class="panel_button" onclick="toggle_theater_mode()">Theater mode</button>
-        <label class="option_toggle">
-            <input type="checkbox" id="theater_chat_toggle" checked="checked" onchange="sync_theater_mode()" />
-            <span>Keep chat in theater</span>
-        </label>
     </div>
 
     <div class="panel_section">
