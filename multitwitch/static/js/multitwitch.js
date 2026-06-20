@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "90";
+var APP_VERSION = "91";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1412,7 +1412,13 @@ function attach_hls_stream(tile, name, video, url) {
                 return;
             }
             update_stream_playback_state(name);
-            if (!player.manual_paused && resume_muted_after_blocked_audio(player)) {
+            // Only treat a pause as "audio was blocked" once the stream is past
+            // startup. During startup a pause is just buffering (hls.js attach,
+            // first segments) -- muting + re-locking here would silence a stream
+            // the browser would have played with sound. safe_play() is the sole
+            // authority on a genuine NotAllowedError refusal.
+            if (!player.manual_paused && !player.startup_pending &&
+                resume_muted_after_blocked_audio(player)) {
                 return;
             }
             // Ignore pauses caused by the tab/window going to the background --
@@ -2193,8 +2199,14 @@ function ensure_stream_playing(name) {
     }
     if (player.startup_pending && now - player.startup_started_at < 20000) {
         if (player.video.paused && player.video.readyState >= 2) {
-            set_video_muted(player.video, true);
-            player.video.volume = 0.0;
+            // Replay at the stream's intended audio state rather than force-muting.
+            // If the browser refuses unmuted audio, safe_play() catches the
+            // NotAllowedError and drops us to muted + re-locked; a later tick then
+            // sees the muted target and keeps video flowing. This preserves
+            // unmuted autoplay where the browser allows it.
+            var target = stream_audio_target(name);
+            set_video_muted(player.video, target.muted);
+            player.video.volume = target.muted ? 0.0 : target.volume;
             safe_play(player.video);
         }
         return;
