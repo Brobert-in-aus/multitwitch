@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "76";
+var APP_VERSION = "77";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1464,10 +1464,16 @@ function attach_hls_stream(tile, name, video, url) {
             // smaller hiccups -- muted-tab pauses, brief buffering -- instead of
             // permanently accumulating delay.
             maxLiveSyncPlaybackRate: 1.5,
-            // Playing close to the live edge leaves a thin startup buffer, so let
-            // hls.js nudge through more stalls before declaring a fatal error.
-            nudgeMaxRetry: 8,
-            lowLatencyMode: true
+            // A little extra nudge headroom for the thin live-edge buffer.
+            nudgeMaxRetry: 5
+            // NOTE: lowLatencyMode is intentionally OFF. Twitch ships no real
+            // LL-HLS parts (#EXT-X-PART), so it gave no latency benefit -- our low
+            // latency comes from promoting prefetch segments in the proxy. What it
+            // *did* do was pin playback to the bare live edge, where the buffer is
+            // too thin to autoplay: the stream would stall, sit on "Reconnecting"
+            // and only render the first frame of each new segment until the user
+            // hit play. Without it hls.js sits ~liveSyncDurationCount behind the
+            // (already-live) edge with a healthy buffer that starts on its own.
         });
         stream_players[name].hls = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, function() {
