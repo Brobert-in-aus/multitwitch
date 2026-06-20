@@ -144,7 +144,9 @@ test("latency sync seeks large errors and gently corrects small drift", () => {
     assert.equal(behind.seek_to, 103);
     assert.equal(behind.playback_rate, 1);
 
-    const ahead = context.latency_sync_correction(6.6, 7, 100, 80, 120);
+    // Small drift inside the nudge band (between an explicit tight tolerance and
+    // the hard seek threshold) is rate-corrected rather than seeked.
+    const ahead = context.latency_sync_correction(6.6, 7, 100, 80, 120, 0.2);
     assert.equal(ahead.seek_to, null);
     assert.equal(ahead.playback_rate, 0.97);
 
@@ -199,9 +201,9 @@ test("sync tolerance widens the synced dead-band and is clamped", () => {
     assert.equal(beyond.seek_to, 102);
     assert.equal(beyond.playback_rate, 1);
 
-    assert.equal(context.clamp_latency_sync_tolerance(9), 3);
-    assert.equal(context.clamp_latency_sync_tolerance(0), 0.1);
-    assert.equal(context.clamp_latency_sync_tolerance(0.24), 0.2);
+    assert.equal(context.clamp_latency_sync_tolerance(9), 3);          // above max
+    assert.equal(context.clamp_latency_sync_tolerance(0), 0.5);        // below min -> clamped up
+    assert.equal(context.clamp_latency_sync_tolerance(0.74), 0.7);     // rounds to a tenth
     localStorage.setItem("multitwitch.latencySyncTolerance", "1.5");
     assert.equal(context.load_saved_latency_sync_tolerance(), 1.5);
 });
