@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "78";
+var APP_VERSION = "79";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1453,20 +1453,17 @@ function attach_hls_stream(tile, name, video, url) {
     if (stream_force_native_hls[name] && native_hls_supported) {
         video.src = url;
     } else if (window.Hls && Hls.isSupported()) {
+        // Original, known-good startup config. The latency win comes entirely
+        // from the proxy promoting Twitch's prefetch segments (so this 3-segment
+        // sync window now sits behind a genuinely-live edge). A thinner window
+        // stopped streams autoplaying -- they tried to start before enough was
+        // buffered and never recovered without a click. We deliberately do NOT
+        // set maxLiveSyncPlaybackRate / liveMaxLatencyDurationCount: those drove
+        // hls.js's latency controller to actively seek and fight the app's own
+        // latency-sync feature.
         var hls = new Hls({
-            // The proxy promotes Twitch's prefetch segments to real segments, so
-            // the playlist edge is genuinely live -- staying a couple of segments
-            // back is already near-native latency with a healthy startup buffer.
-            liveSyncDurationCount: 2,
-            // A little extra nudge headroom for the thin live-edge buffer.
-            nudgeMaxRetry: 5
-            // NOTE: we deliberately DON'T set maxLiveSyncPlaybackRate or
-            // liveMaxLatencyDurationCount, and leave lowLatencyMode off. Those make
-            // hls.js's latency controller actively seek/rate-adjust toward the live
-            // edge, which (a) interrupted the initial muted play() so streams sat
-            // paused until a click, and (b) fought the app's own latency-sync by
-            // yanking a deliberately-delayed tile back to live. Drift recovery is
-            // handled by the sync feature and the jump-to-live button instead.
+            liveSyncDurationCount: 3,
+            lowLatencyMode: true
         });
         stream_players[name].hls = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, function() {
