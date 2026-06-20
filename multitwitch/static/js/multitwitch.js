@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "85";
+var APP_VERSION = "86";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -46,9 +46,11 @@ var GRID_GAP = 4;     // must match #streams `gap` in the CSS
 var TILE_CHROME = 4;  // border width jQuery adds on top of the size we set
 var stream_quality_choice = {};  // name -> requested quality label, survives reloads
 // Edge's native HLS path is more tolerant of some Twitch delivery failures.
-// Once hls.js fails fatally for a channel, keep subsequent reloads native so a
-// fresh hls.js instance cannot enter an unbounded load/fail/reload loop.
-var stream_force_native_hls = {};
+// Native HLS is the primary engine (lower latency, no proxy hop) whenever the
+// browser can actually play the stream. If native can't (e.g. Chromium that
+// reports HLS support but can't demux Twitch's MPEG-TS), the channel is pinned
+// to hls.js for subsequent reloads. Stream sync also requires hls.js.
+var stream_force_hls_js = {};
 var quality_adapt_timer = null;
 // Only re-pick quality once tiles have stopped resizing for this long, so
 // dragging the main-size slider or a window edge doesn't thrash the players.
@@ -1381,6 +1383,8 @@ function attach_hls_stream(tile, name, video, url) {
         last_progress_at: Date.now(),
         recovery_attempt: recovery_attempt,
         hls_recover_attempt: 0,
+        engine: null,
+        native_fallback_timer: null,
         recovery_timer: null,
         resume_timer: null,
         muted_resume_timer: null,
@@ -1473,10 +1477,9 @@ function attach_hls_stream(tile, name, video, url) {
             log_native_media_error(name, video);
             handle_stream_playback_failure(name);
         });
-    var native_hls_supported = !!video.canPlayType("application/vnd.apple.mpegurl");
-    if (stream_force_native_hls[name] && native_hls_supported) {
-        video.src = url;
-    } else if (window.Hls && Hls.isSupported()) {
+    var engine = desired_player_engine(name, video);
+    stream_players[name].engine = engine;
+    if (engine === "hls") {
         // Start ~4s behind the (prefetch-promoted, genuinely-live) edge. We use
         // liveSyncDuration in seconds rather than a segment count because Twitch
         // can report a large target duration; with lowLatencyMode on, hls.js
@@ -1513,13 +1516,87 @@ function attach_hls_stream(tile, name, video, url) {
         });
         hls.loadSource(hls_proxy_url(url));
         hls.attachMedia(video);
-    } else if (native_hls_supported) {
+    } else if (engine === "native") {
+        // Native playback loads the Twitch playlist directly -- no hls.js, no
+        // proxy hop -- so it starts fast and close to live. If the browser
+        // reports HLS support but can't actually play the stream, a watchdog
+        // pins the channel to hls.js and reloads.
         video.src = url;
+        schedule_native_startup_fallback(name);
     } else {
         set_player_status(tile, "This browser cannot play HLS streams.");
         return;
     }
     safe_play(video);
+}
+
+// hls.js is required for stream sync (native HLS exposes no latency/seek control
+// to drive it) and is the fallback when native can't play a stream or isn't
+// supported. Otherwise native HLS is preferred for its lower latency.
+function desired_player_engine(name, video) {
+    var native_supported = !!(video && video.canPlayType("application/vnd.apple.mpegurl"));
+    var hls_js_supported = !!(window.Hls && Hls.isSupported());
+    if (hls_js_supported && (latency_sync_enabled || stream_force_hls_js[name] || !native_supported)) {
+        return "hls";
+    }
+    if (native_supported) {
+        return "native";
+    }
+    return hls_js_supported ? "hls" : null;
+}
+
+// Native reported support but may not actually play Twitch's MPEG-TS segments.
+// If it hasn't started within a few seconds, fall back to hls.js.
+function schedule_native_startup_fallback(name) {
+    var player = stream_players[name];
+    if (!player) {
+        return;
+    }
+    if (player.native_fallback_timer) {
+        clearTimeout(player.native_fallback_timer);
+    }
+    player.native_fallback_timer = setTimeout(function() {
+        var current = stream_players[name];
+        if (!current || current.engine !== "native" || !current.startup_pending ||
+            current.manual_paused) {
+            return;
+        }
+        // If playback has actually advanced, native is working (just settling) --
+        // don't yank it. Only fall back when nothing has played at all.
+        if ((current.video && current.video.currentTime || 0) > 0.2) {
+            return;
+        }
+        if (window.Hls && Hls.isSupported()) {
+            stream_force_hls_js[name] = true;
+            reload_stream_playback(name);
+        }
+    }, 4000);
+}
+
+function clear_native_fallback_timer(player) {
+    if (player && player.native_fallback_timer) {
+        clearTimeout(player.native_fallback_timer);
+        player.native_fallback_timer = null;
+    }
+}
+
+// Reload any stream whose engine no longer matches what it should be -- used when
+// stream sync is toggled, since sync requires hls.js and we prefer native without
+// it.
+function reconcile_player_engines() {
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        if (!player || !player.video || player.manual_paused || player.recovering) {
+            continue;
+        }
+        var want = desired_player_engine(name, player.video);
+        if (want && player.engine && want !== player.engine) {
+            reload_stream_playback(name);
+        }
+    }
 }
 
 function startup_progress_is_stable(player, now) {
@@ -1539,6 +1616,7 @@ function complete_stream_startup(name, player, tile) {
     }
     player.startup_pending = false;
     player.stalled = false;
+    clear_native_fallback_timer(player);
     set_player_status(tile, "");
     sync_active_stream_audio();
     if (latency_sync_enabled && player.sync_natural_latency === null) {
@@ -1649,8 +1727,10 @@ function handle_stream_playback_failure(name) {
     if (!player) {
         return;
     }
-    if (player.hls && player.video && player.video.canPlayType("application/vnd.apple.mpegurl")) {
-        stream_force_native_hls[name] = true;
+    clear_native_fallback_timer(player);
+    // Native HLS couldn't keep this stream playing -> pin it to hls.js.
+    if (player.engine === "native" && window.Hls && Hls.isSupported()) {
+        stream_force_hls_js[name] = true;
     }
     mark_stream_stalled(name, "Reconnecting stream...");
     schedule_stream_recovery(name);
@@ -1870,6 +1950,9 @@ function collect_latency_sync_players() {
 function toggle_latency_sync() {
     if (latency_sync_enabled) {
         disable_latency_sync();
+        // Sync off -> drop the synced streams back to the low-latency native
+        // engine where the browser supports it.
+        reconcile_player_engines();
         return;
     }
     latency_sync_enabled = true;
@@ -1880,6 +1963,8 @@ function toggle_latency_sync() {
             stream_players[name].sync_smoothed_latency = null;
         }
     }
+    // Sync needs hls.js; swap any native players over before measuring.
+    reconcile_player_engines();
     update_latency_sync_ui("Measuring");
     run_latency_sync();
 }
@@ -2408,6 +2493,9 @@ function destroy_stream_player(name) {
         }
         if (player.muted_resume_timer) {
             clearTimeout(player.muted_resume_timer);
+        }
+        if (player.native_fallback_timer) {
+            clearTimeout(player.native_fallback_timer);
         }
         if (player.hls) {
             player.hls.destroy();

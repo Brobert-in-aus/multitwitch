@@ -210,21 +210,49 @@ test("sync tolerance widens the synced dead-band and is clamped", () => {
 });
 
 
-test("fatal hls.js playback failure sticks to native HLS on reload", () => {
+test("engine selection prefers native HLS, uses hls.js for sync and as fallback", () => {
     const {context} = loadApplication();
+    const hlsMock = {isSupported: () => true};
+    context.Hls = hlsMock;
+    context.window.Hls = hlsMock;
+    const nativeVideo = {
+        canPlayType: (type) => (type === "application/vnd.apple.mpegurl" ? "maybe" : "")
+    };
+    const noNativeVideo = {canPlayType: () => ""};
+
+    // Default (no sync): native is preferred for its lower latency.
+    context.latency_sync_enabled = false;
+    assert.equal(context.desired_player_engine("a", nativeVideo), "native");
+    // No native support -> hls.js.
+    assert.equal(context.desired_player_engine("a", noNativeVideo), "hls");
+    // Sync on -> hls.js even where native is available.
+    context.latency_sync_enabled = true;
+    assert.equal(context.desired_player_engine("a", nativeVideo), "hls");
+    // Native proved unplayable -> pinned to hls.js even without sync.
+    context.latency_sync_enabled = false;
+    context.stream_force_hls_js.a = true;
+    assert.equal(context.desired_player_engine("a", nativeVideo), "hls");
+});
+
+
+test("native playback failure pins the channel to hls.js on reload", () => {
+    const {context} = loadApplication();
+    const hlsMock = {isSupported: () => true};
+    context.Hls = hlsMock;
+    context.window.Hls = hlsMock;
     const video = {
         canPlayType(type) {
             return type === "application/vnd.apple.mpegurl" ? "maybe" : "";
         }
     };
-    context.stream_players.example = {hls: {}, video};
+    context.stream_players.example = {engine: "native", video};
     context.mark_stream_stalled = () => {};
     let recoveryScheduled = false;
     context.schedule_stream_recovery = () => { recoveryScheduled = true; };
 
     context.handle_stream_playback_failure("example");
 
-    assert.equal(context.stream_force_native_hls.example, true);
+    assert.equal(context.stream_force_hls_js.example, true);
     assert.equal(recoveryScheduled, true);
 });
 
