@@ -1,4 +1,4 @@
-{% set asset_version = 83 %}
+{% set asset_version = 84 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -61,7 +61,7 @@ $(window).resize(function() {
 <div id="wrapper">
 <aside id="control_panel">
     <div id="brand_block">
-        <div id="brand_name">MultiTwitch <span id="app_version">v{{ asset_version }}</span></div>
+        <div id="brand_name">MultiTwitch <span id="app_version">v{{ asset_version }}</span> <span id="app_beta">Beta</span></div>
         <div id="brand_status">Control deck</div>
     </div>
 
@@ -77,14 +77,17 @@ $(window).resize(function() {
         </div>
     </div>
 
-    <div class="panel_section" id="presets_panel">
-        <div class="section_header">
+    <div class="panel_section is_collapsed" id="presets_panel">
+        <button type="button" class="section_header collapsible_header" id="presets_toggle" aria-expanded="false" aria-controls="presets_body" onclick="toggle_panel_collapsed('presets_panel')">
             <span>Presets</span>
-        </div>
-        <div id="presets_list"></div>
-        <div class="add_stream_row">
-            <input type="text" id="preset_name_input" placeholder="Save lineup as&hellip;" autocomplete="off" onkeyup="preset_name_keyup(event)" />
-            <button type="button" class="panel_button primary" onclick="save_current_preset()">Save</button>
+            <span class="disclosure_chevron" aria-hidden="true">&#8250;</span>
+        </button>
+        <div id="presets_body" class="collapsible_body" hidden>
+            <div id="presets_list"></div>
+            <div class="add_stream_row">
+                <input type="text" id="preset_name_input" placeholder="Save lineup as&hellip;" autocomplete="off" onkeyup="preset_name_keyup(event)" />
+                <button type="button" class="panel_button primary" onclick="save_current_preset()">Save</button>
+            </div>
         </div>
     </div>
 
@@ -114,25 +117,30 @@ $(window).resize(function() {
         </div>
     </div>
 
-    <div class="panel_section" id="latency_sync_panel">
-        <div class="section_header">
+    <div class="panel_section is_collapsed" id="latency_sync_panel">
+        <button type="button" class="section_header collapsible_header" id="latency_sync_toggle" aria-expanded="false" aria-controls="latency_sync_body" onclick="toggle_panel_collapsed('latency_sync_panel')">
             <span>Stream sync <span class="experimental_tag">Experimental</span></span>
-            <span id="latency_sync_state">Need 2 streams</span>
-        </div>
-        <button type="button" class="panel_button" id="latency_sync_button" aria-pressed="false" onclick="toggle_latency_sync()">Sync streams</button>
-        <div class="slider_row">
-            <div class="slider_label">
-                <span>Extra buffer</span>
-                <span id="latency_sync_value">+0s</span>
+            <span class="header_right">
+                <span id="latency_sync_state">Need 2 streams</span>
+                <span class="disclosure_chevron" aria-hidden="true">&#8250;</span>
+            </span>
+        </button>
+        <div id="latency_sync_body" class="collapsible_body" hidden>
+            <button type="button" class="panel_button" id="latency_sync_button" aria-pressed="false" onclick="toggle_latency_sync()">Sync streams</button>
+            <div class="slider_row">
+                <div class="slider_label">
+                    <span>Extra buffer</span>
+                    <span id="latency_sync_value">+0s</span>
+                </div>
+                <input type="range" id="latency_sync_slider" min="0" max="30" step="1" value="0" aria-label="Extra synchronization buffer" oninput="set_latency_sync_delay(this.value)" />
             </div>
-            <input type="range" id="latency_sync_slider" min="0" max="30" step="1" value="0" aria-label="Extra synchronization buffer" oninput="set_latency_sync_delay(this.value)" />
-        </div>
-        <div class="slider_row">
-            <div class="slider_label">
-                <span>Sync tolerance</span>
-                <span id="latency_sync_tolerance_value">&plusmn;1.0s</span>
+            <div class="slider_row">
+                <div class="slider_label">
+                    <span>Sync tolerance</span>
+                    <span id="latency_sync_tolerance_value">&plusmn;1.0s</span>
+                </div>
+                <input type="range" id="latency_sync_tolerance_slider" min="0.5" max="3" step="0.1" value="1.0" aria-label="Sync tolerance: how far apart still counts as synced" oninput="set_latency_sync_tolerance(this.value)" />
             </div>
-            <input type="range" id="latency_sync_tolerance_slider" min="0.5" max="3" step="0.1" value="1.0" aria-label="Sync tolerance: how far apart still counts as synced" oninput="set_latency_sync_tolerance(this.value)" />
         </div>
     </div>
 

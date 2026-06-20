@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "83";
+var APP_VERSION = "84";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -62,6 +62,12 @@ var LATENCY_SYNC_HARD_THRESHOLD = 0.75;
 // about as tight as is meaningful.
 var LATENCY_SYNC_SOFT_THRESHOLD = 1.0;
 var LATENCY_SYNC_MIN_TOLERANCE = 0.5;
+// hls.js can begin playback well behind the live edge (e.g. when the playlist
+// reports a long target duration). If a freshly started stream settles more than
+// LIVE_START_TRIM_BEHIND seconds back, jump it to LIVE_START_TARGET_BEHIND so a
+// hard refresh lands near live instead of deep in the DVR window.
+var LIVE_START_TRIM_BEHIND = 8;
+var LIVE_START_TARGET_BEHIND = 4;
 var latency_sync_enabled = false;
 var latency_sync_extra_delay = load_saved_latency_sync_delay();
 var latency_sync_tolerance = load_saved_latency_sync_tolerance();
@@ -1532,10 +1538,29 @@ function complete_stream_startup(name, player, tile) {
     player.startup_pending = false;
     player.stalled = false;
     set_player_status(tile, "");
+    trim_started_stream_to_live(player);
     sync_active_stream_audio();
     if (latency_sync_enabled && player.sync_natural_latency === null) {
         setTimeout(run_latency_sync, 250);
     }
+}
+
+// If a freshly started stream is sitting far behind live, jump it up to
+// LIVE_START_TARGET_BEHIND -- keeping a buffer cushion -- so a hard refresh lands
+// near live. Leaves it alone when latency sync is driving placement.
+function trim_started_stream_to_live(player) {
+    if (latency_sync_enabled || !player || !player.video) {
+        return;
+    }
+    try {
+        var video = player.video;
+        if (video.seekable && video.seekable.length) {
+            var edge = video.seekable.end(video.seekable.length - 1);
+            if (edge - (video.currentTime || 0) > LIVE_START_TRIM_BEHIND) {
+                video.currentTime = Math.max(0, edge - LIVE_START_TARGET_BEHIND);
+            }
+        }
+    } catch (e) {}
 }
 
 function retry_hls_startup_play(name, hls, video) {
@@ -1785,17 +1810,24 @@ function latency_sync_correction(latency, target, current_time, seek_start, seek
     }
     var error = latency - target;
     var magnitude = Math.abs(error);
+    // Only a big gap (real lag, or a bad startup position) warrants a visible
+    // seek. Keep that threshold comfortably above the tolerance so ordinary drift
+    // is corrected by gently nudging the rate instead of jumping -- otherwise the
+    // stream looks like it falls out of sync and snaps back every time it drifts
+    // one tolerance-width.
+    var seek_threshold = Math.max(LATENCY_SYNC_HARD_THRESHOLD, tolerance + 1.0);
+    if (magnitude >= seek_threshold) {
+        var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + error));
+        return {seek_to: seek_to, playback_rate: 1};
+    }
     // Within the user's tolerance -> considered synced, leave it alone.
     if (magnitude < tolerance) {
         return {seek_to: null, playback_rate: 1};
     }
-    // Big gaps seek; smaller ones nudge the rate. A loose tolerance can exceed
-    // the seek threshold, so seek only once past whichever is larger.
-    if (magnitude >= Math.max(LATENCY_SYNC_HARD_THRESHOLD, tolerance)) {
-        var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + error));
-        return {seek_to: seek_to, playback_rate: 1};
-    }
-    return {seek_to: null, playback_rate: error > 0 ? 1.03 : 0.97};
+    // Nudge the rate proportionally to the overrun so a wider gap is pulled back
+    // faster, ramping from ~3% up to ~6%.
+    var adjust = Math.min(0.06, 0.03 + (magnitude - tolerance) * 0.05);
+    return {seek_to: null, playback_rate: error > 0 ? 1 + adjust : 1 - adjust};
 }
 
 function collect_latency_sync_players() {
@@ -2653,6 +2685,21 @@ function render_stream_together_actions() {
     }
 }
 
+// Generic collapsible panel (Presets, Stream sync). Stream Together has its own
+// variant because it also manages the match-highlight state.
+function toggle_panel_collapsed(panel_id) {
+    set_panel_collapsed(panel_id, !$("#" + panel_id).hasClass("is_collapsed"));
+}
+
+function set_panel_collapsed(panel_id, collapsed) {
+    var panel = $("#" + panel_id);
+    panel.toggleClass("is_collapsed", collapsed);
+    panel.find(".collapsible_body").prop("hidden", collapsed);
+    panel.find(".collapsible_header")
+        .attr("aria-expanded", collapsed ? "false" : "true")
+        .find(".disclosure_chevron").text(collapsed ? "›" : "⌄");
+}
+
 function initialize_stream_together_panel() {
     set_stream_together_collapsed(true);
 }
@@ -3425,6 +3472,10 @@ function render_app_version() {
         label = $("<span>", {id: "app_version"}).appendTo(brand);
     }
     label.text("v" + APP_VERSION);
+    if (brand.find("#app_beta").length === 0) {
+        brand.append(" ");
+        $("<span>", {id: "app_beta", text: "Beta"}).appendTo(brand);
+    }
 }
 
 // Render the version from the (hot-served) JS so a hard refresh shows it even if

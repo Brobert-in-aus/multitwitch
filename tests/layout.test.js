@@ -145,10 +145,11 @@ test("latency sync seeks large errors and gently corrects small drift", () => {
     assert.equal(behind.playback_rate, 1);
 
     // Small drift inside the nudge band (between an explicit tight tolerance and
-    // the hard seek threshold) is rate-corrected rather than seeked.
+    // the seek threshold) is gently rate-corrected rather than seeked.
     const ahead = context.latency_sync_correction(6.6, 7, 100, 80, 120, 0.2);
     assert.equal(ahead.seek_to, null);
-    assert.equal(ahead.playback_rate, 0.97);
+    assert.ok(ahead.playback_rate < 1 && ahead.playback_rate >= 0.9,
+        "a stream that's ahead is gently slowed, not seeked");
 
     const aligned = context.latency_sync_correction(7.1, 7, 100, 80, 120);
     assert.equal(aligned.seek_to, null);
@@ -196,7 +197,7 @@ test("sync tolerance widens the synced dead-band and is clamped", () => {
     assert.equal(within.seek_to, null);
     assert.equal(within.playback_rate, 1);
 
-    // Past a tolerance larger than the seek threshold, it seeks straight away.
+    // A large gap (past tolerance + the seek margin) seeks straight to live.
     const beyond = context.latency_sync_correction(9, 7, 100, 80, 120, 1.0);
     assert.equal(beyond.seek_to, 102);
     assert.equal(beyond.playback_rate, 1);

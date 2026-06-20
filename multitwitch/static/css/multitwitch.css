@@ -387,6 +387,26 @@ body.chat_resizing #chatbox iframe {
     vertical-align: middle;
 }
 
+#app_beta {
+    background: #1e2a3a;
+    border: 1px solid #2f5a8a;
+    border-radius: 3px;
+    color: #7cc4ff;
+    font-size: 9px;
+    font-weight: normal;
+    letter-spacing: 0.5px;
+    margin-left: 4px;
+    padding: 1px 5px;
+    text-transform: uppercase;
+    vertical-align: middle;
+}
+
+.header_right {
+    align-items: center;
+    display: flex;
+    gap: 6px;
+}
+
 #brand_status {
     color: #98a2b3;
     font-size: 11px;
@@ -445,7 +465,7 @@ body.chat_resizing #chatbox iframe {
     line-height: 11px;
 }
 
-#stream_together_panel.is_collapsed .section_header {
+.panel_section.is_collapsed .section_header {
     margin-bottom: 0;
 }
 
