@@ -1226,6 +1226,7 @@ function adapt_stream_qualities() {
         return;
     }
     var dpr = window.devicePixelRatio || 1;
+    var only_stream = $("#streams .stream").length <= 1;
     for (var name in stream_players) {
         if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
             continue;
@@ -1237,6 +1238,17 @@ function adapt_stream_qualities() {
         if (player.manual_paused || player.recovering) {
             continue;
         }
+        var tile = stream_tile_by_name(name);
+        // The main (focus) tile and a lone stream are the focus of attention and
+        // big enough to deserve full resolution -- never downgrade them. If one
+        // was shrunk while in the rest strip and then promoted, pull it back up.
+        if (only_stream || tile.hasClass("is_main")) {
+            if (stream_quality_choice[name] && stream_quality_choice[name] !== "best") {
+                stream_quality_choice[name] = "best";
+                load_direct_stream(tile, name, true, "best");
+            }
+            continue;
+        }
         var rendered_height = player.video.clientHeight;
         if (!rendered_height) {
             continue;
@@ -1246,7 +1258,7 @@ function adapt_stream_qualities() {
             continue;
         }
         stream_quality_choice[name] = target;
-        load_direct_stream(stream_tile_by_name(name), name, true, target);
+        load_direct_stream(tile, name, true, target);
     }
 }
 
@@ -1440,7 +1452,16 @@ function attach_hls_stream(tile, name, video, url) {
         video.src = url;
     } else if (window.Hls && Hls.isSupported()) {
         var hls = new Hls({
-            liveSyncDurationCount: 3,
+            // The proxy promotes Twitch's prefetch segments to real segments, so
+            // the playlist edge is genuinely live -- stay close to it.
+            liveSyncDurationCount: 2,
+            // Hard-seek back to live if a tile ever falls far behind (e.g. after a
+            // long stall); without a cap hls.js never recovers lost latency.
+            liveMaxLatencyDurationCount: 10,
+            // Gently speed up (up to 1.5x) to drift back toward live after the
+            // smaller hiccups -- muted-tab pauses, brief buffering -- instead of
+            // permanently accumulating delay.
+            maxLiveSyncPlaybackRate: 1.5,
             lowLatencyMode: true
         });
         stream_players[name].hls = hls;

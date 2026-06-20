@@ -107,6 +107,8 @@ def _resolve_stream_url(channel, quality):
 
 PLAYLIST_CONTENT_TYPE = 'application/vnd.apple.mpegurl'
 HLS_URI_ATTRIBUTE_RE = re.compile(r'URI="([^"]+)"')
+PREFETCH_TAG = '#EXT-X-TWITCH-PREFETCH:'
+EXTINF_RE = re.compile(r'^#EXTINF:([0-9]*\.?[0-9]+)')
 
 
 def hls_proxy(request):
@@ -170,12 +172,33 @@ def _rewrite_playlist(body, base_url):
     # files remain direct Twitch CDN URLs, so their bandwidth bypasses us.
     lines = []
     next_uri_is_playlist = False
+    last_segment_duration = None
+    prefetch_promoted = False
     for line in body.split('\n'):
         stripped = line.strip()
+        # Twitch advertises its true live edge -- the freshest one or two
+        # segments -- via proprietary #EXT-X-TWITCH-PREFETCH tags. hls.js doesn't
+        # understand that tag, so it would play the last regular segment and sit
+        # several seconds further behind live than Twitch's own player. Promote
+        # the FIRST prefetch URL to a normal #EXTINF segment so hls.js plays near
+        # the edge, but drop the newest one: it may still be mid-write (short
+        # read / 404), and staying a segment back leaves headroom to ride out
+        # lag spikes without stalling. Costs ~1 segment (~2s) of latency.
+        if stripped.startswith(PREFETCH_TAG):
+            prefetch_uri = stripped[len(PREFETCH_TAG):].strip()
+            if prefetch_uri and not prefetch_promoted:
+                duration = last_segment_duration if last_segment_duration is not None else 2.0
+                lines.append('#EXTINF:%.3f,' % duration)
+                lines.append(_rewrite_hls_uri(prefetch_uri, base_url, False))
+                prefetch_promoted = True
+            continue
         if stripped and not stripped.startswith('#'):
             lines.append(_rewrite_hls_uri(stripped, base_url, next_uri_is_playlist))
             next_uri_is_playlist = False
         else:
+            extinf = EXTINF_RE.match(stripped)
+            if extinf:
+                last_segment_duration = float(extinf.group(1))
             tag_has_playlist_uri = stripped.startswith('#EXT-X-MEDIA:') \
                 or stripped.startswith('#EXT-X-I-FRAME-STREAM-INF:')
             rewritten = HLS_URI_ATTRIBUTE_RE.sub(
