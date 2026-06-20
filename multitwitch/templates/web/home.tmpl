@@ -1,4 +1,4 @@
-{% set asset_version = 82 %}
+{% set asset_version = 83 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -130,9 +130,9 @@ $(window).resize(function() {
         <div class="slider_row">
             <div class="slider_label">
                 <span>Sync tolerance</span>
-                <span id="latency_sync_tolerance_value">&plusmn;0.2s</span>
+                <span id="latency_sync_tolerance_value">&plusmn;1.0s</span>
             </div>
-            <input type="range" id="latency_sync_tolerance_slider" min="0.1" max="3" step="0.1" value="0.2" aria-label="Sync tolerance: how far apart still counts as synced" oninput="set_latency_sync_tolerance(this.value)" />
+            <input type="range" id="latency_sync_tolerance_slider" min="0.5" max="3" step="0.1" value="1.0" aria-label="Sync tolerance: how far apart still counts as synced" oninput="set_latency_sync_tolerance(this.value)" />
         </div>
     </div>
 

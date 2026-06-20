@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "82";
+var APP_VERSION = "83";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -57,7 +57,11 @@ var LATENCY_SYNC_DELAY_STORAGE_KEY = "multitwitch.latencySyncDelay";
 var LATENCY_SYNC_TOLERANCE_STORAGE_KEY = "multitwitch.latencySyncTolerance";
 var LATENCY_SYNC_INTERVAL = 2000;
 var LATENCY_SYNC_HARD_THRESHOLD = 0.75;
-var LATENCY_SYNC_SOFT_THRESHOLD = 0.20;  // default "considered synced" tolerance
+// Default "considered synced" tolerance. The underlying latency is segment-
+// granular (~2s), so sub-second targets just chase measurement noise; ~1s is
+// about as tight as is meaningful.
+var LATENCY_SYNC_SOFT_THRESHOLD = 1.0;
+var LATENCY_SYNC_MIN_TOLERANCE = 0.5;
 var latency_sync_enabled = false;
 var latency_sync_extra_delay = load_saved_latency_sync_delay();
 var latency_sync_tolerance = load_saved_latency_sync_tolerance();
@@ -1685,8 +1689,8 @@ function clamp_latency_sync_tolerance(value) {
     if (isNaN(value)) {
         return LATENCY_SYNC_SOFT_THRESHOLD;
     }
-    // 0.1s .. 3.0s, to a tenth of a second.
-    return Math.max(0.1, Math.min(3, Math.round(value * 10) / 10));
+    // 0.5s .. 3.0s, to a tenth of a second.
+    return Math.max(LATENCY_SYNC_MIN_TOLERANCE, Math.min(3, Math.round(value * 10) / 10));
 }
 
 function set_latency_sync_tolerance(value) {
