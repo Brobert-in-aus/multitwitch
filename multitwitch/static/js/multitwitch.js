@@ -1370,6 +1370,7 @@ function attach_hls_stream(tile, name, video, url) {
         last_time: video.currentTime || 0,
         last_progress_at: Date.now(),
         recovery_attempt: recovery_attempt,
+        hls_recover_attempt: 0,
         recovery_timer: null,
         resume_timer: null,
         muted_resume_timer: null,
@@ -1404,6 +1405,7 @@ function attach_hls_stream(tile, name, video, url) {
             if (player && player.video === video) {
                 player.recovering = false;
                 player.recovery_attempt = 0;
+                player.hls_recover_attempt = 0;
                 player.resume_blocked = false;
                 player.last_progress_at = Date.now();
                 player.last_time = video.currentTime || 0;
@@ -1462,6 +1464,9 @@ function attach_hls_stream(tile, name, video, url) {
             // smaller hiccups -- muted-tab pauses, brief buffering -- instead of
             // permanently accumulating delay.
             maxLiveSyncPlaybackRate: 1.5,
+            // Playing close to the live edge leaves a thin startup buffer, so let
+            // hls.js nudge through more stalls before declaring a fatal error.
+            nudgeMaxRetry: 8,
             lowLatencyMode: true
         });
         stream_players[name].hls = hls;
@@ -1478,6 +1483,9 @@ function attach_hls_stream(tile, name, video, url) {
                     return;
                 }
                 log_fatal_hls_error(name, data);
+                if (recover_fatal_hls_error(name, hls, data)) {
+                    return;
+                }
                 handle_stream_playback_failure(name);
             }
         });
@@ -1571,6 +1579,47 @@ function log_native_media_error(name, video) {
         ready_state: video ? video.readyState : null,
         url: sanitize_playback_url(video && (video.currentSrc || video.src))
     }));
+}
+
+// hls.js can usually recover a fatal error in place -- resume the network loader
+// (NETWORK_ERROR) or flush and rebuild the media buffer (MEDIA_ERROR) -- far
+// faster than re-resolving the stream from scratch. This matters most at startup,
+// where a single slow or empty fragment at the thin live edge used to spiral into
+// a loading <-> reconnecting loop until the user hit play. We try a few light
+// recoveries (then fall back to a full reload) and snap toward the live edge so
+// playback actually resumes on its own -- the same thing the play button does.
+function recover_fatal_hls_error(name, hls, data) {
+    var player = stream_players[name];
+    if (!player || player.hls !== hls || !window.Hls) {
+        return false;
+    }
+    player.hls_recover_attempt = (player.hls_recover_attempt || 0) + 1;
+    if (player.hls_recover_attempt > 3) {
+        return false;
+    }
+    try {
+        if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            hls.recoverMediaError();
+        } else if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            hls.startLoad(-1);
+        } else {
+            return false;
+        }
+    } catch (e) {
+        return false;
+    }
+    set_player_status(stream_tile_by_name(name), "Reconnecting stream...");
+    try {
+        var video = player.video;
+        if (video && video.seekable && video.seekable.length) {
+            var live_edge = video.seekable.end(video.seekable.length - 1);
+            if (live_edge - (video.currentTime || 0) > 0.5) {
+                video.currentTime = Math.max(0, live_edge - 0.5);
+            }
+        }
+    } catch (e2) {}
+    safe_play(player.video);
+    return true;
 }
 
 function handle_stream_playback_failure(name) {
