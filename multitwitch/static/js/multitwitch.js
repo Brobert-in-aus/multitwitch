@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "81";
+var APP_VERSION = "82";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1379,6 +1379,7 @@ function attach_hls_stream(tile, name, video, url) {
         startup_started_at: Date.now(),
         startup_progress_started_at: 0,
         sync_natural_latency: null,
+        sync_smoothed_latency: null,
         last_sync_seek_at: 0
     };
     $(video).off(".playbackRecovery")
@@ -1429,6 +1430,19 @@ function attach_hls_stream(tile, name, video, url) {
                 player.recovery_attempt = 0;
                 player.resume_blocked = false;
                 player.stalled = false;
+                // Each stream's measured latency sawtooths by ~1 segment as its
+                // playlist reloads (edge jumps, age resets). Smooth it at the
+                // timeupdate rate (~4x/s) so stream-sync compares stable values
+                // instead of chasing two out-of-phase sawtooths in and out of
+                // tolerance every couple of seconds.
+                if (latency_sync_enabled) {
+                    var lat_sample = measure_player_latency(player);
+                    if (lat_sample !== null) {
+                        player.sync_smoothed_latency = player.sync_smoothed_latency === null
+                            ? lat_sample
+                            : player.sync_smoothed_latency * 0.9 + lat_sample * 0.1;
+                    }
+                }
                 if (startup_progress_is_stable(player, now)) {
                     complete_stream_startup(name, player, tile);
                 }
@@ -1790,10 +1804,16 @@ function collect_latency_sync_players() {
         if (!player || player.manual_paused || !player.video) {
             continue;
         }
-        var latency = measure_player_latency(player);
-        if (latency === null) {
+        var raw_latency = measure_player_latency(player);
+        if (raw_latency === null) {
             continue;
         }
+        // Prefer the smoothed latency (fed at the timeupdate rate); fall back to
+        // the raw read until the first sample lands.
+        if (player.sync_smoothed_latency === null) {
+            player.sync_smoothed_latency = raw_latency;
+        }
+        var latency = player.sync_smoothed_latency;
         if (player.sync_natural_latency === null) {
             player.sync_natural_latency = latency;
         }
@@ -1812,6 +1832,7 @@ function toggle_latency_sync() {
     for (var name in stream_players) {
         if (Object.prototype.hasOwnProperty.call(stream_players, name)) {
             stream_players[name].sync_natural_latency = null;
+            stream_players[name].sync_smoothed_latency = null;
         }
     }
     update_latency_sync_ui("Measuring");
@@ -1857,6 +1878,7 @@ function run_latency_sync() {
     }
     var target = latency_sync_base_latency + latency_sync_extra_delay;
     var corrected = 0;
+    var synced = 0;
     var now = Date.now();
     for (var i = 0; i < measured.length; i++) {
         var item = measured[i];
@@ -1878,9 +1900,15 @@ function run_latency_sync() {
                 video.playbackRate = 1;
                 video.currentTime = correction.seek_to;
                 item.player.last_sync_seek_at = now;
+                // The seek jumps currentTime, so the smoothed latency is now
+                // stale -- re-seed it from the next fresh sample.
+                item.player.sync_smoothed_latency = null;
                 corrected += 1;
             } else {
                 video.playbackRate = correction.playback_rate;
+                if (correction.playback_rate === 1) {
+                    synced += 1;
+                }
             }
             if (!item.player.manual_paused && video.paused) {
                 safe_play(video);
@@ -1894,6 +1922,8 @@ function run_latency_sync() {
         status += " · " + measured.length + "/" + streams.length;
     } else if (corrected) {
         status += " · Aligning";
+    } else if (synced === measured.length) {
+        status += " · In sync";
     }
     update_latency_sync_ui(status);
 }
