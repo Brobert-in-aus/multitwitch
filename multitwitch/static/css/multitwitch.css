@@ -881,8 +881,17 @@ body.theater_mode #theater_controls {
     gap: 6px;
     position: fixed;
     right: 14px;
-    top: 14px;
+    /* Sit below the per-tile pause / jump-to-live buttons (top:8px, ~30px tall)
+       so the controls don't cover them. */
+    top: 52px;
     z-index: 50;
+}
+
+/* With chat shown, the chat tabs sit at the top-right, so shift the controls
+   left of the chat column (offset tracks the live chat width via JS) to keep
+   them clear of the tab strip and the stream title in the top-left. */
+body.theater_mode.theater_with_chat #theater_controls {
+    right: var(--theater-controls-right, 354px);
 }
 
 .theater_button {
@@ -891,9 +900,16 @@ body.theater_mode #theater_controls {
     color: #e5e7eb;
     cursor: pointer;
     font-size: 12px;
-    opacity: 0.45;
+    /* Fully transparent at rest (they overlay a stream). Recent mouse movement
+       fades them to a faint hint (see .theater_pointer_active), and hovering
+       brings them to full. */
+    opacity: 0;
     padding: 5px 10px;
     transition: opacity 0.15s ease;
+}
+
+body.theater_pointer_active .theater_button {
+    opacity: 0.45;
 }
 
 #theater_controls:hover .theater_button {

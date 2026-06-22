@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "93";
+var APP_VERSION = "94";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -137,6 +137,9 @@ function optimize_size(n) {
         $("#streams").width(width);
         $("#chatbox").width(chat_width);
         $(".stream_chat").height(chat_height);
+        // Park the theater controls just left of the chat column so they clear
+        // the chat tabs (top-right) and the stream title overlay (top-left).
+        document.body.style.setProperty("--theater-controls-right", (chat_width + 12) + "px");
     } else {
         width = wrapper_width;
         $("#streams").width(width);
@@ -3101,8 +3104,27 @@ function sync_theater_mode() {
     $("#chatbox").css("display", "");
     $("body").toggleClass("theater_mode", theater_mode);
     $("body").toggleClass("theater_with_chat", theater_mode && chat_on && !chat_hidden);
-    $("#theater_chat_button").toggleClass("is_selected", chat_on && !chat_hidden).attr("aria-pressed", (chat_on && !chat_hidden) ? "true" : "false");
+    var chat_visible = chat_on && !chat_hidden;
+    $("#theater_chat_button").toggleClass("is_selected", chat_visible).attr("aria-pressed", chat_visible ? "true" : "false").text(chat_visible ? "Hide Chat" : "Show Chat");
+    // Reveal the controls on mouse movement (faint), only while in theater mode.
+    $(document).off("mousemove.theater");
+    clearTimeout(theater_pointer_timer);
+    if (theater_mode) {
+        $(document).on("mousemove.theater", bump_theater_pointer);
+        bump_theater_pointer();
+    } else {
+        $("body").removeClass("theater_pointer_active");
+    }
     optimize_size(-1);
+}
+
+var theater_pointer_timer = null;
+function bump_theater_pointer() {
+    $("body").addClass("theater_pointer_active");
+    clearTimeout(theater_pointer_timer);
+    theater_pointer_timer = setTimeout(function() {
+        $("body").removeClass("theater_pointer_active");
+    }, 2200);
 }
 
 function show_theater_hint() {
@@ -3173,6 +3195,15 @@ function initialize_keyboard() {
         }
         if (key === "t" || key === "T") {
             toggle_theater_mode();
+            return;
+        }
+        if (key === "c" || key === "C") {
+            // Mirror whichever chat toggle is active for the current mode.
+            if (theater_mode) {
+                toggle_theater_chat();
+            } else {
+                toggle_chat();
+            }
             return;
         }
         if (key === "f" || key === "F") {

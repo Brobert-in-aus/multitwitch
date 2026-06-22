@@ -1,4 +1,4 @@
-{% set asset_version = 93 %}
+{% set asset_version = 94 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -137,10 +137,10 @@ $(window).resize(function() {
             </div>
             <input type="range" id="main_size_slider" min="0" max="100" value="70" aria-label="Main stream size" oninput="set_main_size(this.value)" />
         </div>
-        <button type="button" class="panel_button" onclick="toggle_theater_mode()">Theater mode</button>
+        <button type="button" class="panel_button" onclick="toggle_theater_mode()">Theatre mode</button>
         <label class="option_toggle">
             <input type="checkbox" id="theater_chat_toggle" checked="checked" onchange="sync_theater_mode()" />
-            <span>Keep chat in theater</span>
+            <span>Keep chat in theatre</span>
         </label>
     </div>
 
@@ -159,7 +159,7 @@ $(window).resize(function() {
                     <span>Extra buffer</span>
                     <span id="latency_sync_value">+0s</span>
                 </div>
-                <input type="range" id="latency_sync_slider" min="0" max="30" step="1" value="0" aria-label="Extra synchronization buffer" oninput="set_latency_sync_delay(this.value)" />
+                <input type="range" id="latency_sync_slider" min="0" max="30" step="1" value="0" aria-label="Extra synchronisation buffer" oninput="set_latency_sync_delay(this.value)" />
             </div>
             <div class="slider_row">
                 <div class="slider_label">
@@ -194,10 +194,10 @@ $(window).resize(function() {
 
 <main id="watch_area">
 <div id="theater_controls">
-    <button type="button" id="theater_chat_button" class="theater_button" aria-pressed="true" onclick="toggle_theater_chat()">Chat</button>
-    <button type="button" class="theater_button" onclick="exit_theater_mode()" title="Exit theater (Esc)">Exit theater</button>
+    <button type="button" id="theater_chat_button" class="theater_button" aria-pressed="true" onclick="toggle_theater_chat()">Hide Chat</button>
+    <button type="button" class="theater_button" onclick="exit_theater_mode()" title="Exit Theatre (Esc)">Exit Theatre</button>
 </div>
-<div id="theater_hint">Press Escape to exit theater mode</div>
+<div id="theater_hint">Press Escape to exit theatre mode</div>
 <div id="streams">
     {% for stream in streams %}
 
@@ -238,8 +238,8 @@ $(window).resize(function() {
 <h1>MultiTwitch</h1>
 <div id="helptext">
 <p>A personal control deck for watching several <a href="https://twitch.tv/">Twitch</a> channels in one window. Add channels straight in the URL &mdash; for example <a href="/gamesdonequick/esamarathon">/gamesdonequick/esamarathon</a> &mdash; or use the control deck on the left to add them one at a time.</p>
-<p>Pick a <strong>Grid</strong>, <strong>1 Main</strong>, <strong>2 Wide</strong>, or <strong>2 Stack</strong> layout, click any stream to make it the audio source, set the master volume, and drop into theater mode (press <strong>T</strong>, <strong>Esc</strong> to leave). Twitch chat opens in tabs beside the video.</p>
-<p>Keyboard: <strong>1</strong>&ndash;<strong>9</strong> set the audio source, <strong>M</strong> mutes, and with a stream under your cursor <strong>F</strong> fullscreens it while <strong>P</strong> pops it out (picture-in-picture). <strong>Shift-click</strong> a stream to mix in its audio with its own volume.</p>
+<p>Pick a <strong>Grid</strong>, <strong>1 Main</strong>, <strong>2 Wide</strong>, or <strong>2 Stack</strong> layout, click any stream to make it the audio source, set the master volume, and drop into theatre mode (press <strong>T</strong>, <strong>Esc</strong> to leave). Twitch chat opens in tabs beside the video.</p>
+<p>Keyboard: <strong>1</strong>&ndash;<strong>9</strong> set the audio source, <strong>M</strong> mutes, <strong>C</strong> toggles chat, and with a stream under your cursor <strong>F</strong> fullscreens it while <strong>P</strong> pops it out (picture-in-picture). <strong>Shift-click</strong> a stream to mix in its audio with its own volume.</p>
 <p>Connect your Twitch account to load followed channels with live status and optional go-live notifications. <strong>Stream Together</strong> collaborators are discovered automatically for loaded channels.</p>
 </div>
 <div id="fork_note">Forked from <a href="https://github.com/bhamrick/multitwitch">bhamrick/multitwitch</a></div>
