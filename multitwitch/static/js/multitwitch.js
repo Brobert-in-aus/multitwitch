@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "94";
+var APP_VERSION = "95";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1513,7 +1513,13 @@ function attach_hls_stream(tile, name, video, url) {
         // browser extension, not this config.
         var hls = new Hls({
             liveSyncDuration: 4,
-            nudgeMaxRetry: 5
+            nudgeMaxRetry: 5,
+            // hls.js keeps all played-out media behind the playhead by default
+            // (backBufferLength: Infinity). On a live stream watched for hours,
+            // across several tiles, that SourceBuffer grows without bound until
+            // the tab dies with "Out of Memory". We never scrub backwards, so a
+            // short back buffer is all sync needs; cap it to evict old segments.
+            backBufferLength: 30
         });
         stream_players[name].hls = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, function() {
