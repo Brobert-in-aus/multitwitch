@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "96";
+var APP_VERSION = "98";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -18,6 +18,7 @@ var hovered_stream = null;  // tile under the cursor, target for fullscreen / Pi
 var layout_mode = "grid";
 var theater_mode = false;
 var feedback_open = false;
+var help_open = false;
 // Main-size slider positions by layout. Grid and 2-wide are fixed displays.
 var main_size_fractions = {
     "focus-one": 0.70,
@@ -28,7 +29,7 @@ var active_border_timer = null;
 var audio_unlocked = false;  // browsers block autoplay-with-sound until a gesture
 var audio_restore_pending = false;
 var master_volume = 0.70;
-var master_muted = true;
+var master_muted = false;
 // Per-stream audio added via Shift-click: name -> {on, volume, follows_master}.
 // Each entry defaults to master volume and tracks it until its own slider is
 // dragged. Not persisted; Shift-clicking off deletes the entry, so a later
@@ -3198,6 +3199,24 @@ function submit_feedback() {
     });
 }
 
+function initialize_help_modal() {
+    $("#help_overlay").on("click", function(e) {
+        if (e.target === this) {
+            close_help_modal();
+        }
+    });
+}
+
+function open_help_modal() {
+    help_open = true;
+    $("#help_overlay").addClass("visible");
+}
+
+function close_help_modal() {
+    help_open = false;
+    $("#help_overlay").removeClass("visible");
+}
+
 function initialize_touch() {
     try {
         is_touch_device = !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
@@ -3241,6 +3260,10 @@ function initialize_keyboard() {
         if (key === "Escape" || e.keyCode === 27) {
             if (feedback_open) {
                 close_feedback_form();
+                return;
+            }
+            if (help_open) {
+                close_help_modal();
                 return;
             }
             if (theater_mode) {

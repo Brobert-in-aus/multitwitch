@@ -31,9 +31,25 @@ class WebViewTests(unittest.TestCase):
         self.assertNotIn('bad-name', response.text)
         self.assertIn('<title>StreamMulti</title>', response.text)
         self.assertIn('id="feedback_button"', response.text)
+        self.assertIn('id="help_button"', response.text)
+        self.assertIn('id="help_overlay"', response.text)
+        self.assertNotIn('Stream sync', response.text.split('id="help_overlay"')[1].split('id="helpbox"')[0])
         self.assertIn('var twitch_parent_query = "parent=localhost";', response.text)
         self.assertIn('class="panel_section is_collapsed" id="stream_together_panel"', response.text)
         self.assertIn('<div id="stream_together_body" hidden>', response.text)
+        self.assertIn('id="latency_sync_panel"', response.text)
+
+    def test_home_hides_stream_sync_only_on_streammulti_live(self):
+        hidden_request = SimpleNamespace(
+            matchdict={'streams': []}, params={}, domain='streammulti.live', host='streammulti.live',
+        )
+        shown_request = SimpleNamespace(
+            matchdict={'streams': []}, params={}, domain='multistream.robertmckinnon.au',
+            host='multistream.robertmckinnon.au',
+        )
+
+        self.assertNotIn('id="latency_sync_panel"', WebView.home(hidden_request).text)
+        self.assertIn('id="latency_sync_panel"', WebView.home(shown_request).text)
 
     def test_healthz(self):
         response = WebView.healthz(SimpleNamespace())
