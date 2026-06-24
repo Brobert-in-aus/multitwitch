@@ -63,6 +63,9 @@ def _send_via_resend(api_key, payload):
     request = Request(RESEND_API_URL, data=body, method='POST')
     request.add_header('Authorization', 'Bearer ' + api_key)
     request.add_header('Content-Type', 'application/json')
+    # Resend sits behind Cloudflare, which blocks the default Python-urllib
+    # User-Agent (HTTP 403, error 1010). Send an explicit one.
+    request.add_header('User-Agent', 'StreamMulti/1.0 (+https://streammulti.live)')
     with urlopen(request, timeout=10) as response:
         response.read()
 
