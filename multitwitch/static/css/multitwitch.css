@@ -645,15 +645,19 @@ body.chat_resizing #chatbox iframe {
     vertical-align: middle;
 }
 
+#main_volume_row .slider_label {
+    font-size: 13px;
+}
+
 .volume_control_row {
     align-items: center;
     display: flex;
     gap: 6px;
 }
 
-/* Muted: dim the track so the slider position doesn't read as "playing at 70%". */
+/* Muted: grey out the track so the slider position doesn't read as "playing at 70%". */
 .slider_row.is_muted #volume_slider {
-    opacity: 0.5;
+    accent-color: #667085;
 }
 
 .volume_control_row #volume_slider {
@@ -691,7 +695,7 @@ body.chat_resizing #chatbox iframe {
 #followed_channels {
     display: grid;
     gap: 5px;
-    max-height: 280px;
+    max-height: 840px;
     overflow: auto;
 }
 
@@ -1059,7 +1063,7 @@ body.theater_mode.theater_with_chat .stream_chat {
     margin-top: 10px;
 }
 
-#feedback_overlay {
+.modal_overlay {
     align-items: center;
     background: rgba(2, 4, 7, 0.7);
     bottom: 0;
@@ -1072,11 +1076,11 @@ body.theater_mode.theater_with_chat .stream_chat {
     z-index: 50;
 }
 
-#feedback_overlay.visible {
+.modal_overlay.visible {
     display: flex;
 }
 
-#feedback_box {
+.modal_box {
     background: #11151b;
     border: 1px solid #344054;
     border-radius: 10px;
@@ -1088,7 +1092,7 @@ body.theater_mode.theater_with_chat .stream_chat {
     width: 420px;
 }
 
-#feedback_close {
+.modal_close {
     background: none;
     border: 0;
     color: #98a2b3;
@@ -1101,15 +1105,15 @@ body.theater_mode.theater_with_chat .stream_chat {
     top: 12px;
 }
 
-#feedback_close:hover {
+.modal_close:hover {
     color: #f7f7f8;
 }
 
-#feedback_title {
+.modal_title {
     margin: 0 0 4px;
 }
 
-#feedback_intro {
+.modal_intro {
     color: #98a2b3;
     margin: 0 0 14px;
 }
@@ -1142,6 +1146,60 @@ body.theater_mode.theater_with_chat .stream_chat {
 
 #feedback_status.success {
     color: #86efac;
+}
+
+#help_button {
+    background: #1b222d;
+    border: 1px solid #344054;
+    border-radius: 50%;
+    color: #98a2b3;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: bold;
+    height: 17px;
+    line-height: 1;
+    margin-left: 4px;
+    padding: 0;
+    vertical-align: middle;
+    width: 17px;
+}
+
+#help_button:hover {
+    background: #263142;
+    color: #f7f7f8;
+}
+
+#help_box {
+    max-height: calc(100vh - 64px);
+    overflow-y: auto;
+    width: 560px;
+}
+
+#help_box h3 {
+    margin: 16px 0 6px;
+}
+
+#help_box h3:first-of-type {
+    margin-top: 0;
+}
+
+#help_box p,
+#help_box ul {
+    line-height: 1.5;
+    margin: 0 0 10px;
+}
+
+#help_box ul {
+    padding-left: 20px;
+}
+
+#help_box a {
+    color: #22d3ee;
+    text-decoration: none;
+}
+
+#help_box a:hover {
+    text-decoration: underline;
 }
 
 #bottom_right_bar {

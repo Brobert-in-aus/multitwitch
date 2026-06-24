@@ -26,7 +26,7 @@ Streams and playback:
 * Select one stream as the audio source by clicking its video.
 * Shift-click additional streams to mix their audio with independent volume.
 * Master volume and mute controls, persisted in local browser storage. The
-  first-run default is 70% and muted.
+  first-run default is 70% and unmuted.
 * Per-stream pause and resume controls.
 * Per-stream jump-to-live controls for correcting multi-stream drift.
 * Optional latency synchronization (experimental) that aligns streams to the

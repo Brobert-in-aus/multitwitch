@@ -1,4 +1,4 @@
-{% set asset_version = 96 %}
+{% set asset_version = 98 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -47,6 +47,7 @@ $(document).ready(function() {
     initialize_follow_tooltip();
     initialize_notifications();
     initialize_feedback();
+    initialize_help_modal();
 
     // Do this after all the jqueryui setup.
     optimize_size({{ nstreams }});
@@ -64,7 +65,7 @@ $(window).resize(function() {
 <div id="wrapper">
 <aside id="control_panel">
     <div id="brand_block">
-        <div id="brand_name">StreamMulti <span id="app_version">v{{ asset_version }}</span> <span id="app_beta">Beta</span></div>
+        <div id="brand_name">StreamMulti <span id="app_version">v{{ asset_version }}</span> <span id="app_beta">Beta</span> <button type="button" id="help_button" onclick="open_help_modal()" aria-label="Help and features" title="Help and features">?</button></div>
         <div id="brand_status">Control deck</div>
         <button type="button" id="feedback_button" class="panel_button" onclick="open_feedback_form()">Feedback</button>
     </div>
@@ -108,15 +109,14 @@ $(window).resize(function() {
     </div>
 
     <div class="panel_section">
-        <button type="button" class="panel_button" onclick="toggle_chat()">Toggle chat</button>
-        <div class="slider_row">
+        <div class="slider_row" id="main_volume_row">
             <div class="slider_label">
-                <span>Volume</span>
+                <span>Main stream volume</span>
                 <span id="volume_value">70%</span>
             </div>
             <div class="volume_control_row">
                 <input type="range" id="volume_slider" min="0" max="100" value="70" aria-label="Master volume" oninput="set_master_volume(this.value)" />
-                <button type="button" class="panel_button icon_button" id="mute_button" onclick="toggle_master_mute()" aria-label="Unmute" title="Unmute">&#128263;</button>
+                <button type="button" class="panel_button icon_button" id="mute_button" onclick="toggle_master_mute()" aria-label="Mute" title="Mute">&#128266;</button>
             </div>
         </div>
     </div>
@@ -140,12 +140,14 @@ $(window).resize(function() {
             <input type="range" id="main_size_slider" min="0" max="100" value="70" aria-label="Main stream size" oninput="set_main_size(this.value)" />
         </div>
         <button type="button" class="panel_button" onclick="toggle_theater_mode()">Theatre mode</button>
+        <button type="button" class="panel_button" onclick="toggle_chat()">Toggle chat</button>
         <label class="option_toggle">
             <input type="checkbox" id="theater_chat_toggle" checked="checked" onchange="sync_theater_mode()" />
             <span>Keep chat in theatre</span>
         </label>
     </div>
 
+    {% if show_stream_sync %}
     <div class="panel_section is_collapsed" id="latency_sync_panel">
         <button type="button" class="section_header collapsible_header" id="latency_sync_toggle" aria-expanded="false" aria-controls="latency_sync_body" onclick="toggle_panel_collapsed('latency_sync_panel')">
             <span>Stream sync <span class="experimental_tag">Experimental</span></span>
@@ -172,6 +174,7 @@ $(window).resize(function() {
             </div>
         </div>
     </div>
+    {% endif %}
 
     <div class="panel_section">
         <div class="section_header">
@@ -236,11 +239,11 @@ $(window).resize(function() {
 </main>
 
 
-<div id="feedback_overlay">
-<div id="feedback_box" role="dialog" aria-modal="true" aria-labelledby="feedback_title">
-    <button type="button" id="feedback_close" aria-label="Close feedback form" onclick="close_feedback_form()">&times;</button>
-    <h2 id="feedback_title">Send feedback</h2>
-    <p id="feedback_intro">Bugs, ideas, anything &mdash; it goes straight to me.</p>
+<div id="feedback_overlay" class="modal_overlay">
+<div id="feedback_box" class="modal_box" role="dialog" aria-modal="true" aria-labelledby="feedback_title">
+    <button type="button" class="modal_close" aria-label="Close feedback form" onclick="close_feedback_form()">&times;</button>
+    <h2 class="modal_title" id="feedback_title">Send feedback</h2>
+    <p class="modal_intro">Bugs, ideas, anything &mdash; it goes straight to me.</p>
     <textarea id="feedback_message" placeholder="What's on your mind?" maxlength="4000" rows="5"></textarea>
     <input type="email" id="feedback_email" placeholder="Your email (optional, for a reply)" autocomplete="email" />
     <div id="feedback_status" role="status"></div>
@@ -251,6 +254,51 @@ $(window).resize(function() {
 </div>
 </div>
 
+<div id="help_overlay" class="modal_overlay">
+<div id="help_box" class="modal_box" role="dialog" aria-modal="true" aria-labelledby="help_title">
+    <button type="button" class="modal_close" aria-label="Close help" onclick="close_help_modal()">&times;</button>
+    <h2 class="modal_title" id="help_title">StreamMulti features</h2>
+    <p class="modal_intro">A personal control deck for watching several <a href="https://twitch.tv/">Twitch</a> channels in one window.</p>
+
+    <h3>Adding streams</h3>
+    <p>Add channels straight in the URL &mdash; for example <a href="/gamesdonequick/esamarathon">/gamesdonequick/esamarathon</a> &mdash; or use the "Add a channel" box in the control deck. Drag a tile onto another to swap their positions, and save a lineup as a named preset to reload later without re-adding everything.</p>
+
+    <h3>Layouts</h3>
+    <ul>
+        <li><strong>Grid</strong> &mdash; equally sized streams that fill the available area.</li>
+        <li><strong>1 Main</strong> &mdash; one primary stream with the rest fitted beside and below it.</li>
+        <li><strong>2 Wide</strong> &mdash; two full-width primary streams side by side.</li>
+        <li><strong>2 Stack</strong> &mdash; two stacked primary streams, with the rest fitted around them.</li>
+    </ul>
+    <p>Main-stream size is adjustable where the layout supports it, and your layout, main size, and active audio source all persist across refreshes. <strong>Theatre mode</strong> (the button, or press <strong>T</strong>) hides the control deck for a focused view; press <strong>Esc</strong> to leave.</p>
+
+    <h3>Audio</h3>
+    <p>Click any stream to make it the audio source. <strong>Shift-click</strong> additional streams to mix in their audio with an independent volume each. The master volume and mute state are remembered between visits.</p>
+
+    <h3>Per-stream controls</h3>
+    <p>Hover a tile for pause/resume and jump-to-live buttons, plus its title, channel, and game. A stream that goes offline is shown distinctly rather than just stalling.</p>
+
+    <h3>Keyboard shortcuts</h3>
+    <ul>
+        <li><strong>1</strong>&ndash;<strong>9</strong> &mdash; set the audio source</li>
+        <li><strong>M</strong> &mdash; mute/unmute</li>
+        <li><strong>C</strong> &mdash; toggle chat</li>
+        <li><strong>T</strong> &mdash; toggle theatre mode, <strong>Esc</strong> to leave</li>
+        <li><strong>F</strong> &mdash; fullscreen the stream under your cursor</li>
+        <li><strong>P</strong> &mdash; pop it out (picture-in-picture)</li>
+    </ul>
+
+    <h3>Chat</h3>
+    <p>Twitch chat opens in tabs beside the video for every loaded channel, with a draggable width and a compact theatre-mode size.</p>
+
+    <h3>Twitch account</h3>
+    <p>Connect your Twitch account to load your followed channels with live status, filter them, and optionally get a desktop notification when one goes live. <strong>Stream Together</strong> collaborators are discovered automatically for loaded channels and are never added without you choosing to.</p>
+
+    <h3>Feedback</h3>
+    <p>Spotted a bug or have an idea? Use the <strong>Feedback</strong> button below the title &mdash; it comes straight to me.</p>
+</div>
+</div>
+
 <div id="helpbox">
 <h1>StreamMulti</h1>
 <div id="helptext">
@@ -258,6 +306,7 @@ $(window).resize(function() {
 <p>Pick a <strong>Grid</strong>, <strong>1 Main</strong>, <strong>2 Wide</strong>, or <strong>2 Stack</strong> layout, click any stream to make it the audio source, set the master volume, and drop into theatre mode (press <strong>T</strong>, <strong>Esc</strong> to leave). Twitch chat opens in tabs beside the video.</p>
 <p>Keyboard: <strong>1</strong>&ndash;<strong>9</strong> set the audio source, <strong>M</strong> mutes, <strong>C</strong> toggles chat, and with a stream under your cursor <strong>F</strong> fullscreens it while <strong>P</strong> pops it out (picture-in-picture). <strong>Shift-click</strong> a stream to mix in its audio with its own volume.</p>
 <p>Connect your Twitch account to load followed channels with live status and optional go-live notifications. <strong>Stream Together</strong> collaborators are discovered automatically for loaded channels.</p>
+<p>Click the <strong>?</strong> next to "Beta" any time for the full feature list.</p>
 </div>
 <div id="fork_note">Forked from <a href="https://github.com/bhamrick/multitwitch">bhamrick/multitwitch</a></div>
 </div>
