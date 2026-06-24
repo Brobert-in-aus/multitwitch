@@ -147,17 +147,25 @@ network, behind the VPS Caddy instance. Twitch OAuth sessions are stored in
 SQLite on a named volume. Litestream replication to Backblaze B2 is enabled
 when all five LITESTREAM_* variables are present.
 
+A second, stateless Go sidecar (hlsproxy) handles the high-frequency
+/api/hls-proxy* traffic so it isn't bound by Waitress's thread pool; Caddy
+splits that one path to the sidecar while everything else still reaches the
+Pyramid app (see deploy/Caddyfile). The frontend's path contract is
+unchanged -- only the backend selection moved.
+
 Deployment artifacts:
 
     Dockerfile                  Python 3.10 image with Streamlink and Litestream
     docker/entrypoint.sh        Restores/replicates SQLite, then starts Waitress
     litestream.yml              Backblaze B2 replication configuration
-    deploy/docker-compose.yml   Production service, volume, env, and networks
-    deploy/Caddyfile            Shared-Caddy reverse proxy block
+    cmd/hlsproxy/main.go        Go HLS playlist proxy/rewriter sidecar
+    Dockerfile.hlsproxy         Image for the hlsproxy sidecar (stateless, no secrets)
+    deploy/docker-compose.yml   Production services, volume, env, and networks
+    deploy/Caddyfile            Shared-Caddy reverse proxy blocks (app + hlsproxy)
     multistream.env.example     VPS environment template (real file mode 600)
     .github/workflows/deploy.yml  GHCR build and VPS deployment workflow
 
-The app exposes GET /healthz for container health checks.
+Both the app and the sidecar expose GET /healthz for container health checks.
 
 One-time infrastructure setup:
 

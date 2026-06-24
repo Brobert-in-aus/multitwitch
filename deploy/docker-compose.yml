@@ -2,6 +2,10 @@
 # Lives at /opt/multistream/docker-compose.yml on the VPS. Joins the shared
 # `edge` network so the single Caddy can reverse_proxy multistream:6543.
 # NOTE: no `ports:` — backends are never published to the host.
+#
+# hlsproxy is a stateless Go sidecar (cmd/hlsproxy) that takes over the
+# /api/hls-proxy* path from the Pyramid app -- see deploy/Caddyfile. It has
+# no session/DB dependency on `multistream`, so it only joins `edge`.
 
 services:
   multistream:
@@ -23,6 +27,22 @@ services:
       - edge                             # shared front-door network Caddy is on
     volumes:
       - multistream-data:/app/data       # SQLite session DB (stateful)
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  hlsproxy:
+    image: ghcr.io/brobert-in-aus/multitwitch-hlsproxy:latest
+    restart: unless-stopped
+    environment:
+      PORT: "8080"
+    expose:
+      - "8080"
+    networks:
+      - edge                             # only needs to be reachable by Caddy
+    mem_limit: 64m
     logging:
       driver: json-file
       options:
