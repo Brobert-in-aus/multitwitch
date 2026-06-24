@@ -1,4 +1,4 @@
-{% set asset_version = 95 %}
+{% set asset_version = 96 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -46,6 +46,7 @@ $(document).ready(function() {
     initialize_follow_refresh();
     initialize_follow_tooltip();
     initialize_notifications();
+    initialize_feedback();
 
     // Do this after all the jqueryui setup.
     optimize_size({{ nstreams }});
@@ -63,8 +64,9 @@ $(window).resize(function() {
 <div id="wrapper">
 <aside id="control_panel">
     <div id="brand_block">
-        <div id="brand_name">MultiTwitch <span id="app_version">v{{ asset_version }}</span> <span id="app_beta">Beta</span></div>
+        <div id="brand_name">StreamMulti <span id="app_version">v{{ asset_version }}</span> <span id="app_beta">Beta</span></div>
         <div id="brand_status">Control deck</div>
+        <button type="button" id="feedback_button" class="panel_button" onclick="open_feedback_form()">Feedback</button>
     </div>
 
     <div class="panel_section">
@@ -234,8 +236,23 @@ $(window).resize(function() {
 </main>
 
 
+<div id="feedback_overlay">
+<div id="feedback_box" role="dialog" aria-modal="true" aria-labelledby="feedback_title">
+    <button type="button" id="feedback_close" aria-label="Close feedback form" onclick="close_feedback_form()">&times;</button>
+    <h2 id="feedback_title">Send feedback</h2>
+    <p id="feedback_intro">Bugs, ideas, anything &mdash; it goes straight to me.</p>
+    <textarea id="feedback_message" placeholder="What's on your mind?" maxlength="4000" rows="5"></textarea>
+    <input type="email" id="feedback_email" placeholder="Your email (optional, for a reply)" autocomplete="email" />
+    <div id="feedback_status" role="status"></div>
+    <div class="button_row">
+        <button type="button" class="panel_button primary" id="feedback_submit" onclick="submit_feedback()">Send</button>
+        <button type="button" class="panel_button" onclick="close_feedback_form()">Cancel</button>
+    </div>
+</div>
+</div>
+
 <div id="helpbox">
-<h1>MultiTwitch</h1>
+<h1>StreamMulti</h1>
 <div id="helptext">
 <p>A personal control deck for watching several <a href="https://twitch.tv/">Twitch</a> channels in one window. Add channels straight in the URL &mdash; for example <a href="/gamesdonequick/esamarathon">/gamesdonequick/esamarathon</a> &mdash; or use the control deck on the left to add them one at a time.</p>
 <p>Pick a <strong>Grid</strong>, <strong>1 Main</strong>, <strong>2 Wide</strong>, or <strong>2 Stack</strong> layout, click any stream to make it the audio source, set the master volume, and drop into theatre mode (press <strong>T</strong>, <strong>Esc</strong> to leave). Twitch chat opens in tabs beside the video.</p>

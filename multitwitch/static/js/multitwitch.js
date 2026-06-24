@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "95";
+var APP_VERSION = "96";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -17,6 +17,7 @@ var active_stream = null;
 var hovered_stream = null;  // tile under the cursor, target for fullscreen / PiP
 var layout_mode = "grid";
 var theater_mode = false;
+var feedback_open = false;
 // Main-size slider positions by layout. Grid and 2-wide are fixed displays.
 var main_size_fractions = {
     "focus-one": 0.70,
@@ -3142,6 +3143,61 @@ function show_theater_hint() {
     }, 3200));
 }
 
+function initialize_feedback() {
+    $("#feedback_overlay").on("click", function(e) {
+        if (e.target === this) {
+            close_feedback_form();
+        }
+    });
+}
+
+function open_feedback_form() {
+    feedback_open = true;
+    $("#feedback_status").attr("class", "").text("");
+    $("#feedback_message").val("");
+    $("#feedback_email").val("");
+    $("#feedback_overlay").addClass("visible");
+    $("#feedback_message").focus();
+}
+
+function close_feedback_form() {
+    feedback_open = false;
+    $("#feedback_overlay").removeClass("visible");
+}
+
+function submit_feedback() {
+    var message = $.trim($("#feedback_message").val());
+    var email = $.trim($("#feedback_email").val());
+    var $status = $("#feedback_status");
+
+    if (!message) {
+        $status.attr("class", "error").text("Please enter a message.");
+        return;
+    }
+
+    var $submit = $("#feedback_submit");
+    $submit.prop("disabled", true).text("Sending...");
+    $status.attr("class", "").text("");
+
+    $.ajax({
+        url: "/api/feedback",
+        method: "POST",
+        data: {message: message, email: email},
+        timeout: 15000,
+        success: function() {
+            $status.attr("class", "success").text("Thanks, sent!");
+            setTimeout(close_feedback_form, 1400);
+        },
+        error: function(xhr) {
+            var msg = (xhr.responseJSON && xhr.responseJSON.error) || "Could not send feedback right now.";
+            $status.attr("class", "error").text(msg);
+        },
+        complete: function() {
+            $submit.prop("disabled", false).text("Send");
+        }
+    });
+}
+
 function initialize_touch() {
     try {
         is_touch_device = !!(window.matchMedia && window.matchMedia("(hover: none)").matches);
@@ -3183,6 +3239,10 @@ function initialize_keyboard() {
         var key = e.key || "";
         var in_field = $(e.target).is("input, textarea, select");
         if (key === "Escape" || e.keyCode === 27) {
+            if (feedback_open) {
+                close_feedback_form();
+                return;
+            }
             if (theater_mode) {
                 exit_theater_mode();
             }

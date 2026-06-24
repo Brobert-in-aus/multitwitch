@@ -1,4 +1,4 @@
-# Independent stack for multistream.robertmckinnon.au (handbook Option B).
+# Independent stack for streammulti.live (StreamMulti, handbook Option B).
 # Lives at /opt/multistream/docker-compose.yml on the VPS. Joins the shared
 # `edge` network so the single Caddy can reverse_proxy multistream:6543.
 # NOTE: no `ports:` — backends are never published to the host.
@@ -15,7 +15,7 @@ services:
       PORT: "6543"
       TWITCH_SESSION_DB: /app/data/multistream.sqlite3
       TWITCH_SECURE_COOKIES: "1"        # always behind Caddy TLS
-      TWITCH_REDIRECT_URI: https://multistream.robertmckinnon.au/auth/twitch/callback
+      TWITCH_REDIRECT_URI: https://streammulti.live/auth/twitch/callback
     expose:
       - "6543"
     networks:

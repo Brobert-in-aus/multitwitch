@@ -1,4 +1,4 @@
-# MultiTwitch Roadmap
+# StreamMulti Roadmap
 
 This fork is a personal multistream control deck. The core feature set is now
 implemented; this file tracks remaining verification and maintenance work.

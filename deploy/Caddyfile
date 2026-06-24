@@ -1,11 +1,13 @@
-# Caddy block for multistream.robertmckinnon.au.
+# Caddy block for streammulti.live (StreamMulti, formerly multistream.robertmckinnon.au).
 #
 # The handbook keeps ONE shared Caddyfile at /opt/workout/Caddyfile. The deploy
 # workflow splices THIS block into it automatically (marker-delimited,
 # idempotent) then validates + reloads Caddy -- no manual edit needed. The
 # (security) snippet (HSTS) is already defined at the top of that shared file.
+# Caddy auto-issues its own Let's Encrypt cert here regardless of which
+# registrar/domain this is -- no extra TLS setup needed once DNS resolves.
 
-multistream.robertmckinnon.au {
+streammulti.live {
   import security
   encode gzip
   reverse_proxy multistream:6543

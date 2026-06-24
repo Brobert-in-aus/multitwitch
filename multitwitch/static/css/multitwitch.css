@@ -1055,6 +1055,95 @@ body.theater_mode.theater_with_chat .stream_chat {
     color: #22d3ee;
 }
 
+#feedback_button {
+    margin-top: 10px;
+}
+
+#feedback_overlay {
+    align-items: center;
+    background: rgba(2, 4, 7, 0.7);
+    bottom: 0;
+    display: none;
+    justify-content: center;
+    left: 0;
+    position: fixed;
+    right: 0;
+    top: 0;
+    z-index: 50;
+}
+
+#feedback_overlay.visible {
+    display: flex;
+}
+
+#feedback_box {
+    background: #11151b;
+    border: 1px solid #344054;
+    border-radius: 10px;
+    box-shadow: 0 0 30px rgba(0, 0, 0, 0.45);
+    box-sizing: border-box;
+    max-width: calc(100vw - 32px);
+    padding: 22px 26px 24px;
+    position: relative;
+    width: 420px;
+}
+
+#feedback_close {
+    background: none;
+    border: 0;
+    color: #98a2b3;
+    cursor: pointer;
+    font-size: 20px;
+    line-height: 1;
+    padding: 4px;
+    position: absolute;
+    right: 12px;
+    top: 12px;
+}
+
+#feedback_close:hover {
+    color: #f7f7f8;
+}
+
+#feedback_title {
+    margin: 0 0 4px;
+}
+
+#feedback_intro {
+    color: #98a2b3;
+    margin: 0 0 14px;
+}
+
+#feedback_message,
+#feedback_email {
+    background: #07090c;
+    border: 1px solid #344054;
+    box-sizing: border-box;
+    color: #f7f7f8;
+    font: inherit;
+    margin-bottom: 8px;
+    padding: 8px;
+    width: 100%;
+}
+
+#feedback_message {
+    resize: vertical;
+}
+
+#feedback_status {
+    font-size: 12px;
+    margin-bottom: 8px;
+    min-height: 1.2em;
+}
+
+#feedback_status.error {
+    color: #fca5a5;
+}
+
+#feedback_status.success {
+    color: #86efac;
+}
+
 #bottom_right_bar {
     height: 1em;
     position: absolute;
