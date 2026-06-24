@@ -1,4 +1,7 @@
-# Caddy block for streammulti.live (StreamMulti, formerly multistream.robertmckinnon.au).
+# Caddy blocks for StreamMulti: streammulti.live is production; multistream.
+# robertmckinnon.au is kept running as a dev/staging site (e.g. for testing
+# Twitch OAuth and the HLS proxy against a real deployed domain instead of
+# localhost) -- both point at the same `multistream` container.
 #
 # The handbook keeps ONE shared Caddyfile at /opt/workout/Caddyfile. The deploy
 # workflow splices THIS block into it automatically (marker-delimited,
@@ -8,6 +11,12 @@
 # registrar/domain this is -- no extra TLS setup needed once DNS resolves.
 
 streammulti.live {
+  import security
+  encode gzip
+  reverse_proxy multistream:6543
+}
+
+multistream.robertmckinnon.au {
   import security
   encode gzip
   reverse_proxy multistream:6543

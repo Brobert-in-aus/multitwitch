@@ -15,7 +15,12 @@ services:
       PORT: "6543"
       TWITCH_SESSION_DB: /app/data/multistream.sqlite3
       TWITCH_SECURE_COOKIES: "1"        # always behind Caddy TLS
-      TWITCH_REDIRECT_URI: https://streammulti.live/auth/twitch/callback
+      # No TWITCH_REDIRECT_URI pinned here: this app answers on two public
+      # domains (streammulti.live + the multistream.robertmckinnon.au dev
+      # site, see deploy/Caddyfile), so the redirect is derived per-request
+      # from request.host_url instead (requires both URLs registered in the
+      # Twitch app's settings). Pin TWITCH_REDIRECT_URI in /etc/multistream.env
+      # only if you go back to a single fixed domain.
     expose:
       - "6543"
     networks:

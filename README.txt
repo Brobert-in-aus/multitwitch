@@ -160,13 +160,22 @@ when all five LITESTREAM_* variables are present. The VPS-side stack, the
 data volume, and the GHCR image all keep the internal "multistream"/
 "multitwitch" naming -- only the public domain and on-page branding changed.
 
+The same container answers on two public domains (see deploy/Caddyfile):
+streammulti.live is production, and multistream.robertmckinnon.au is kept
+running as a dev/staging site (e.g. for testing Twitch OAuth or the HLS
+proxy against a real deployed domain instead of localhost). No
+TWITCH_REDIRECT_URI is pinned in docker-compose.yml -- it's derived per-
+request from whichever domain the visitor used (multitwitch/__init__.py
+trusts Caddy's X-Forwarded-Proto/-Host; runapp.py tells Waitress to trust
+that hop since the container is never reachable except through Caddy).
+
 Deployment artifacts:
 
     Dockerfile                  Python 3.10 image with Streamlink and Litestream
     docker/entrypoint.sh        Restores/replicates SQLite, then starts Waitress
     litestream.yml              Backblaze B2 replication configuration
     deploy/docker-compose.yml   Production service, volume, env, and networks
-    deploy/Caddyfile            Shared-Caddy reverse proxy block
+    deploy/Caddyfile            Shared-Caddy reverse proxy blocks (both domains)
     multistream.env.example     VPS environment template (real file mode 600)
     .github/workflows/deploy.yml  GHCR build and VPS deployment workflow
 
@@ -174,14 +183,17 @@ The app exposes GET /healthz for container health checks.
 
 One-time infrastructure setup:
 
-1. Point the streammulti.live DNS record at the VPS.
+1. Point both the streammulti.live and multistream.robertmckinnon.au DNS
+   records at the VPS.
 2. Configure DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, and optionally DEPLOY_PORT
    as GitHub repository secrets.
 3. Create /etc/multistream.env on the VPS from multistream.env.example and set
    its permissions to 600.
-4. Register this production Twitch redirect URL:
+4. Register BOTH of these production Twitch redirect URLs on the same Twitch
+   app (the Twitch Developer Console allows multiple redirect URLs per app):
 
        https://streammulti.live/auth/twitch/callback
+       https://multistream.robertmckinnon.au/auth/twitch/callback
 
 5. Create the shared Docker edge network if it does not already exist:
 
