@@ -1,4 +1,4 @@
-{% set asset_version = 100 %}
+{% set asset_version = 102 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -51,6 +51,7 @@ $(document).ready(function() {
 
     // Do this after all the jqueryui setup.
     optimize_size({{ nstreams }});
+    initialize_usage_events();
     setTimeout(function(){
         optimize_size({{ nstreams }})
         }, 500);

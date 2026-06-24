@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "98";
+var APP_VERSION = "102";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -86,6 +86,138 @@ var chat_width_override = load_saved_chat_width();
 var chat_resizing = false;
 var chat_resize_grab_offset = 0;
 var chat_resize_right = 0;
+var usage_events_ready = false;
+
+function initialize_usage_events() {
+    usage_events_ready = true;
+    initialize_client_error_events();
+    track_usage_event("page_view");
+}
+
+function initialize_client_error_events() {
+    window.addEventListener("error", function(event) {
+        // Ignore resource-load failures and third-party script errors. These are
+        // usually network/CDN/browser issues, not StreamMulti bugs.
+        if (event.target && event.target !== window) {
+            return;
+        }
+        if (event.message === "Script error.") {
+            return;
+        }
+        if (event.filename && event.filename.indexOf("/static/js/multitwitch.js") == -1) {
+            return;
+        }
+        track_usage_event("client_error", {
+            area: "runtime",
+            kind: bug_error_kind(event.error, event.message),
+            detail: bug_error_detail(event.message)
+        });
+    });
+    window.addEventListener("unhandledrejection", function(event) {
+        track_usage_event("client_error", {
+            area: "promise",
+            kind: bug_error_kind(event.reason, ""),
+            detail: bug_error_detail(event.reason && event.reason.message)
+        });
+    });
+}
+
+function bug_error_kind(error, message) {
+    if (error && error.name) {
+        return String(error.name).slice(0, 40);
+    }
+    message = String(message || "");
+    if (message.indexOf(" is not defined") != -1) {
+        return "ReferenceError";
+    }
+    if (message.indexOf(" is not a function") != -1) {
+        return "TypeError";
+    }
+    return "Error";
+}
+
+function bug_error_detail(message) {
+    message = String(message || "");
+    if (message.indexOf(" is not defined") != -1) {
+        return "undefined_reference";
+    }
+    if (message.indexOf(" is not a function") != -1) {
+        return "not_a_function";
+    }
+    if (message.indexOf("Cannot read") != -1 || message.indexOf("undefined") != -1 || message.indexOf("null") != -1) {
+        return "nullish_access";
+    }
+    if (message.indexOf("JSON") != -1) {
+        return "json_parse";
+    }
+    return "other";
+}
+
+function track_usage_event(event_name, fields) {
+    var payload = usage_event_payload(event_name, fields || {});
+    var body = JSON.stringify(payload);
+    if (navigator.sendBeacon) {
+        try {
+            if (navigator.sendBeacon("/api/events", new Blob([body], {type: "application/json"}))) {
+                return;
+            }
+        } catch (e) {}
+    }
+    $.ajax({
+        url: "/api/events",
+        type: "POST",
+        data: body,
+        contentType: "application/json",
+        timeout: 1500
+    });
+}
+
+function usage_event_payload(event_name, fields) {
+    var payload = {
+        event: event_name,
+        stream_count: streams.length,
+        layout: layout_mode,
+        darkmode: !!darkmode,
+        theater: !!theater_mode,
+        chat_hidden: !!chat_hidden,
+        viewport: viewport_bucket(),
+        screen: screen_bucket()
+    };
+    for (var key in fields) {
+        if (Object.prototype.hasOwnProperty.call(fields, key)) {
+            payload[key] = fields[key];
+        }
+    }
+    return payload;
+}
+
+function viewport_bucket() {
+    var width = $(window).width();
+    if (width < 640) {
+        return "xs";
+    }
+    if (width < 900) {
+        return "sm";
+    }
+    if (width < 1280) {
+        return "md";
+    }
+    if (width < 1800) {
+        return "lg";
+    }
+    return "xl";
+}
+
+function screen_bucket() {
+    var width = window.screen && window.screen.width ? window.screen.width : 0;
+    if (width < 900) {
+        return "small";
+    }
+    if (width < 1600) {
+        return "medium";
+    }
+    return "large";
+}
 
 function optimize_size(n) {
     // Call with n = -1 to use previously known quantity
@@ -588,6 +720,7 @@ function toggle_chat() {
     } else {
         hide_chat();
     }
+    track_usage_event("chat_toggled");
 }
 
 function submit_add_stream() {
@@ -637,6 +770,7 @@ function remove_stream(name) {
     render_followed_channels();
     render_presets();
     load_current_stream_metadata();
+    track_usage_event("stream_removed");
 }
 
 function chat_src(name) {
@@ -2797,6 +2931,7 @@ function add_stream(name) {
     render_presets();
     load_current_stream_metadata();
     auto_check_stream_together([name]);
+    track_usage_event("stream_added");
     return true;
 }
 
@@ -3036,6 +3171,9 @@ function set_layout_mode(mode) {
     sync_main_size_control();
     save_layout_mode(mode);
     optimize_size(-1);
+    if (usage_events_ready) {
+        track_usage_event("layout_changed");
+    }
 }
 
 function layout_label(mode) {
@@ -3090,6 +3228,7 @@ function toggle_theater_mode() {
     if (theater_mode) {
         show_theater_hint();
     }
+    track_usage_event("theater_toggled");
 }
 
 function exit_theater_mode() {
@@ -3159,6 +3298,7 @@ function open_feedback_form() {
     $("#feedback_email").val("");
     $("#feedback_overlay").addClass("visible");
     $("#feedback_message").focus();
+    track_usage_event("feedback_opened");
 }
 
 function close_feedback_form() {
@@ -3400,6 +3540,7 @@ function initialize_twitch() {
 
 function connect_twitch() {
     ensure_twitch_auth_listener();
+    track_usage_event("twitch_connect_clicked");
     var return_to = window.location.pathname + window.location.search;
     // Authenticate in a popup so the main page -- and every loaded stream --
     // stays put. The callback closes the popup and posts back to us; we just
@@ -3509,6 +3650,7 @@ function set_notify_enabled(on) {
     try {
         window.localStorage.setItem(GO_LIVE_NOTIFY_KEY, on ? "1" : "0");
     } catch (e) {}
+    track_usage_event("notifications_toggled", {enabled: !!on});
     if (on) {
         start_go_live_polling();
     } else {
@@ -3663,6 +3805,7 @@ function load_followed_live_streams() {
         render_current_streams();
         update_all_stream_tile_metadata();
         set_twitch_hint("Loaded " + followed_channels.length + " followed channels.");
+        track_usage_event("followed_channels_loaded");
     });
 }
 

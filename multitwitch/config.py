@@ -1,5 +1,6 @@
 from multitwitch.views.web import WebView
 from multitwitch.views import direct
+from multitwitch.views import analytics
 from multitwitch.views import feedback
 from multitwitch.views import twitch
 
@@ -44,6 +45,9 @@ def routes(config):
 
     config.add_route('feedback', '/api/feedback')
     config.add_view(feedback.submit, route_name='feedback', request_method='POST')
+
+    config.add_route('analytics', '/api/events')
+    config.add_view(analytics.record, route_name='analytics', request_method='POST')
 
     config.add_route('root', '*streams')
     config.add_view(WebView.home, route_name='root')

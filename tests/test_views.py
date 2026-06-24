@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest import mock
 from urllib.error import URLError
 
-from multitwitch.views import direct, feedback, twitch
+from multitwitch.views import analytics, direct, feedback, twitch
 from multitwitch.views.web import WebView
 
 
@@ -315,6 +315,108 @@ class FeedbackTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertNotIn('boom', response.text)
+
+
+class AnalyticsTests(unittest.TestCase):
+    def setUp(self):
+        analytics._RATE_LIMIT_BUCKETS.clear()
+        analytics._CLEANUP_DATES.clear()
+
+    def tearDown(self):
+        analytics._RATE_LIMIT_BUCKETS.clear()
+        analytics._CLEANUP_DATES.clear()
+
+    def request(self, log_file, payload, retention_days=30):
+        return SimpleNamespace(
+            body=json.dumps(payload).encode('utf-8'),
+            params={},
+            headers={'X-Forwarded-For': '203.0.113.5'},
+            host='streammulti.live',
+            remote_addr='10.0.0.2',
+            registry=SimpleNamespace(settings={
+                'analytics.log_file': log_file,
+                'analytics.retention_days': str(retention_days),
+            }),
+        )
+
+    def test_record_writes_privacy_light_json_line(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_file = os.path.join(temp_dir, 'events.jsonl')
+            with mock.patch.object(analytics, '_today', return_value='2026-06-25'):
+                response = analytics.record(self.request(log_file, {
+                    'event': 'page_view',
+                    'stream_count': 3,
+                    'layout': 'grid',
+                    'viewport': 'lg',
+                    'channel': 'gamesdonequick',
+                    'url': '/gamesdonequick',
+                }))
+
+            self.assertEqual(response.status_code, 204)
+            with open(os.path.join(temp_dir, 'events-2026-06-25.jsonl'), encoding='utf-8') as f:
+                event = json.loads(f.readline())
+
+        self.assertEqual(event['event'], 'page_view')
+        self.assertEqual(event['stream_count'], 3)
+        self.assertEqual(event['host'], 'streammulti.live')
+        self.assertIn('ts', event)
+        self.assertNotIn('channel', event)
+        self.assertNotIn('url', event)
+
+    def test_unknown_event_is_ignored(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_file = os.path.join(temp_dir, 'events.jsonl')
+            response = analytics.record(self.request(log_file, {'event': 'channel_name_here'}))
+
+            self.assertEqual(response.status_code, 204)
+            self.assertFalse(os.path.exists(log_file))
+
+    def test_missing_log_file_config_is_noop(self):
+        response = analytics.record(self.request('', {'event': 'page_view'}))
+
+        self.assertEqual(response.status_code, 204)
+
+    def test_old_daily_logs_are_pruned(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_file = os.path.join(temp_dir, 'events.jsonl')
+            old_log = os.path.join(temp_dir, 'events-2026-05-01.jsonl')
+            recent_log = os.path.join(temp_dir, 'events-2026-06-20.jsonl')
+            unrelated_log = os.path.join(temp_dir, 'other-2026-05-01.jsonl')
+            for path in (old_log, recent_log, unrelated_log):
+                with open(path, 'w', encoding='utf-8') as f:
+                    f.write('{}\n')
+
+            with mock.patch.object(analytics, '_today', return_value='2026-06-25'):
+                response = analytics.record(self.request(log_file, {'event': 'page_view'}))
+
+            self.assertEqual(response.status_code, 204)
+            self.assertFalse(os.path.exists(old_log))
+            self.assertTrue(os.path.exists(recent_log))
+            self.assertTrue(os.path.exists(unrelated_log))
+
+    def test_client_error_keeps_only_allowlisted_bug_fields(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            log_file = os.path.join(temp_dir, 'events.jsonl')
+            with mock.patch.object(analytics, '_today', return_value='2026-06-25'):
+                response = analytics.record(self.request(log_file, {
+                    'event': 'client_error',
+                    'area': 'runtime',
+                    'kind': 'TypeError',
+                    'detail': 'nullish_access',
+                    'stack': 'secret stack',
+                    'filename': 'https://streammulti.live/static/js/multitwitch.js',
+                }))
+
+            self.assertEqual(response.status_code, 204)
+            with open(os.path.join(temp_dir, 'events-2026-06-25.jsonl'), encoding='utf-8') as f:
+                event = json.loads(f.readline())
+
+        self.assertEqual(event['event'], 'client_error')
+        self.assertEqual(event['area'], 'runtime')
+        self.assertEqual(event['kind'], 'TypeError')
+        self.assertEqual(event['detail'], 'nullish_access')
+        self.assertNotIn('stack', event)
+        self.assertNotIn('filename', event)
 
 
 if __name__ == '__main__':

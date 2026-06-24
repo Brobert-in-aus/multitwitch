@@ -20,6 +20,8 @@ services:
       PORT: "6543"
       TWITCH_SESSION_DB: /app/data/multistream.sqlite3
       TWITCH_SECURE_COOKIES: "1"        # always behind Caddy TLS
+      ANALYTICS_LOG_FILE: /app/data/usage-events.jsonl
+      ANALYTICS_RETENTION_DAYS: "30"
       # No TWITCH_REDIRECT_URI pinned here: this app answers on two public
       # domains (streammulti.live + the multistream.robertmckinnon.au dev
       # site, see robertmckinnon-au-hosting/caddy/Caddyfile), so the redirect is derived per-request

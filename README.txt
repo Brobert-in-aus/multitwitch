@@ -232,6 +232,35 @@ itself is never shown in the page or in any API response -- only used as the
 From address server-side. A simple per-IP cooldown (30s) and a 4000-character
 cap guard against trivial abuse; there's no CAPTCHA.
 
+Lightweight usage events
+~~~~~~~~~~~~~~~~~~~~~~~~
+
+The frontend sends small first-party usage events to POST /api/events. The
+production Compose stack uses this base path:
+
+    /app/data/usage-events.jsonl
+
+The app writes daily JSONL files derived from that base path:
+
+    /app/data/usage-events-YYYY-MM-DD.jsonl
+
+Events are intentionally coarse: page views, stream count changes, layout
+changes, theatre/chat toggles, feedback opens, Twitch connect clicks, followed
+channel loads, and notification toggles. They include timestamp, host, stream
+count, layout, dark-mode/theatre/chat booleans, and viewport/screen buckets.
+They do not store IP addresses, cookies, Twitch channel names, full URLs,
+playlist URLs, signed tokens, user IDs, or Twitch auth details.
+
+Client-side bug-like runtime errors from StreamMulti's own JavaScript are also
+logged as coarse `client_error` events. Network failures, Twitch auth failures,
+offline streams, media playback delivery issues, and third-party script/resource
+load failures are not intentionally logged as analytics errors.
+
+Set ANALYTICS_LOG_FILE to override or disable the log path. Leaving it blank
+turns the endpoint into a no-op that still returns 204. Set
+ANALYTICS_RETENTION_DAYS to control daily log pruning; production defaults to
+30 days.
+
 Production operations
 ~~~~~~~~~~~~~~~~~~~~~
 
