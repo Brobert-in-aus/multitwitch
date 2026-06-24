@@ -3182,7 +3182,7 @@ function submit_feedback() {
 
     $.ajax({
         url: "/api/feedback",
-        method: "POST",
+        type: "POST",
         data: {message: message, email: email},
         timeout: 15000,
         success: function() {
@@ -3434,7 +3434,7 @@ function ensure_twitch_auth_listener() {
 function disconnect_twitch() {
     $.ajax({
         url: "/auth/twitch/logout",
-        method: "POST",
+        type: "POST",
         complete: function() {
             twitch_user = null;
             followed_channels = [];
