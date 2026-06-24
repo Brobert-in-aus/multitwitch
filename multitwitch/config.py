@@ -1,5 +1,6 @@
 from multitwitch.views.web import WebView
 from multitwitch.views import direct
+from multitwitch.views import feedback
 from multitwitch.views import twitch
 
 def routes(config):
@@ -40,6 +41,9 @@ def routes(config):
 
     config.add_route('hls_proxy', '/api/hls-proxy')
     config.add_view(direct.hls_proxy, route_name='hls_proxy')
+
+    config.add_route('feedback', '/api/feedback')
+    config.add_view(feedback.submit, route_name='feedback', request_method='POST')
 
     config.add_route('root', '*streams')
     config.add_view(WebView.home, route_name='root')

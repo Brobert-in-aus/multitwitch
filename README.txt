@@ -1,9 +1,10 @@
-MultiTwitch
+StreamMulti
 ===========
 
-MultiTwitch is a personal multistream control deck for watching several Twitch
-channels in one browser window. This fork plays Twitch HLS streams directly via
-Streamlink and hls.js instead of using the official video embed.
+StreamMulti (live at streammulti.live) is a personal multistream control deck
+for watching several Twitch channels in one browser window. This fork plays
+Twitch HLS streams directly via Streamlink and hls.js instead of using the
+official video embed.
 
 Channels are encoded in the URL:
 
@@ -62,6 +63,9 @@ Chat and Twitch integration:
   The panel starts collapsed and glows when collaborators are detected; opening
   it acknowledges and clears the glow. Streams are never added automatically;
   already-loaded collaborators are marked as added.
+* A "Feedback" button under the title opens a small form that emails feedback
+  to the maintainer via Resend; the underlying address is never shown to the
+  visitor (see "Feedback form" under Deployment).
 
 Stream Together depends on an undocumented Twitch endpoint used by twitch.tv.
 It is deliberately treated as a best-effort personal-use feature and may break
@@ -117,6 +121,13 @@ The app also accepts these optional settings through the ini file or environment
     TWITCH_SESSION_DB
     TWITCH_SECURE_COOKIES
 
+The feedback form (see "Feedback form" under Deployment) needs its own two
+variables, also in multistream.env -- the form just shows "not configured"
+locally if you skip them:
+
+    RESEND_API_KEY
+    FEEDBACK_TO
+
 The real multistream.env contains credentials and is intentionally ignored by
 Git. Commit multistream.env.example only.
 
@@ -139,13 +150,24 @@ Together still require browser-level smoke testing because they depend on Twitch
 and browser media policy.
 
 
-Deployment: multistream.robertmckinnon.au
------------------------------------------
+Deployment: streammulti.live
+----------------------------
 
 The production deployment is an independent Compose stack on the shared edge
 network, behind the VPS Caddy instance. Twitch OAuth sessions are stored in
 SQLite on a named volume. Litestream replication to Backblaze B2 is enabled
-when all five LITESTREAM_* variables are present.
+when all five LITESTREAM_* variables are present. The VPS-side stack, the
+data volume, and the GHCR image all keep the internal "multistream"/
+"multitwitch" naming -- only the public domain and on-page branding changed.
+
+The same container answers on two public domains (see deploy/Caddyfile):
+streammulti.live is production, and multistream.robertmckinnon.au is kept
+running as a dev/staging site (e.g. for testing Twitch OAuth or the HLS
+proxy against a real deployed domain instead of localhost). No
+TWITCH_REDIRECT_URI is pinned in docker-compose.yml -- it's derived per-
+request from whichever domain the visitor used (multitwitch/__init__.py
+trusts Caddy's X-Forwarded-Proto/-Host; runapp.py tells Waitress to trust
+that hop since the container is never reachable except through Caddy).
 
 A second, stateless Go sidecar (hlsproxy) handles the high-frequency
 /api/hls-proxy* traffic so it isn't bound by Waitress's thread pool; Caddy
@@ -161,7 +183,7 @@ Deployment artifacts:
     cmd/hlsproxy/main.go        Go HLS playlist proxy/rewriter sidecar
     Dockerfile.hlsproxy         Image for the hlsproxy sidecar (stateless, no secrets)
     deploy/docker-compose.yml   Production services, volume, env, and networks
-    deploy/Caddyfile            Shared-Caddy reverse proxy blocks (app + hlsproxy)
+    deploy/Caddyfile            Shared-Caddy reverse proxy blocks (both domains, +hlsproxy split)
     multistream.env.example     VPS environment template (real file mode 600)
     .github/workflows/deploy.yml  GHCR build and VPS deployment workflow
 
@@ -169,13 +191,16 @@ Both the app and the sidecar expose GET /healthz for container health checks.
 
 One-time infrastructure setup:
 
-1. Point the multistream DNS record at the VPS.
+1. Point both the streammulti.live and multistream.robertmckinnon.au DNS
+   records at the VPS.
 2. Configure DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, and optionally DEPLOY_PORT
    as GitHub repository secrets.
 3. Create /etc/multistream.env on the VPS from multistream.env.example and set
    its permissions to 600.
-4. Register this production Twitch redirect URL:
+4. Register BOTH of these production Twitch redirect URLs on the same Twitch
+   app (the Twitch Developer Console allows multiple redirect URLs per app):
 
+       https://streammulti.live/auth/twitch/callback
        https://multistream.robertmckinnon.au/auth/twitch/callback
 
 5. Create the shared Docker edge network if it does not already exist:
@@ -185,6 +210,25 @@ One-time infrastructure setup:
 Every push to master builds and publishes the image, updates the production
 Compose stack, validates Caddy, and reloads the shared proxy. Pushes to master
 should therefore be treated as production deployments.
+
+Feedback form
+~~~~~~~~~~~~~
+
+The "Feedback" button (multitwitch/views/feedback.py, route POST
+/api/feedback) sends via Resend's HTTP API. Set in /etc/multistream.env:
+
+    RESEND_API_KEY   Same Resend account/API key used by other tools is fine
+                      (the robertmckinnon.au domain must be sending-verified).
+    FEEDBACK_TO       Where submissions are delivered. Required -- there is
+                      no default, so feedback silently 503s until this is set.
+    FEEDBACK_FROM     Optional; defaults to
+                      "StreamMulti Feedback <feedback@robertmckinnon.au>".
+
+The visitor's optional email (if they leave one) is set as Reply-To, not
+From, so replying in your inbox goes straight to them. feedback@robertmckinnon.au
+itself is never shown in the page or in any API response -- only used as the
+From address server-side. A simple per-IP cooldown (30s) and a 4000-character
+cap guard against trivial abuse; there's no CAPTCHA.
 
 Production operations
 ~~~~~~~~~~~~~~~~~~~~~

@@ -4,8 +4,9 @@ import tempfile
 import unittest
 from types import SimpleNamespace
 from unittest import mock
+from urllib.error import URLError
 
-from multitwitch.views import direct, twitch
+from multitwitch.views import direct, feedback, twitch
 from multitwitch.views.web import WebView
 
 
@@ -28,6 +29,8 @@ class WebViewTests(unittest.TestCase):
         self.assertEqual(response.text.count('data-stream="gamesdonequick"'), 1)
         self.assertEqual(response.text.count('data-stream="other_channel"'), 1)
         self.assertNotIn('bad-name', response.text)
+        self.assertIn('<title>StreamMulti</title>', response.text)
+        self.assertIn('id="feedback_button"', response.text)
         self.assertIn('var twitch_parent_query = "parent=localhost";', response.text)
         self.assertIn('class="panel_section is_collapsed" id="stream_together_panel"', response.text)
         self.assertIn('<div id="stream_together_body" hidden>', response.text)
@@ -221,6 +224,71 @@ class TwitchViewTests(unittest.TestCase):
 
             self.assertEqual(loaded, {'token': {'access_token': 'token'}})
             self.assertIsNone(twitch._load_session(request, 'session-id'))
+
+
+class FeedbackTests(unittest.TestCase):
+    def setUp(self):
+        feedback._RATE_LIMIT_LAST_SEEN.clear()
+        self._env_patcher = mock.patch.dict(os.environ, {
+            'RESEND_API_KEY': 'test-key',
+            'FEEDBACK_TO': 'owner@example.com',
+        })
+        self._env_patcher.start()
+
+    def tearDown(self):
+        self._env_patcher.stop()
+        feedback._RATE_LIMIT_LAST_SEEN.clear()
+
+    def request(self, **params):
+        return SimpleNamespace(params=params, headers={}, remote_addr='203.0.113.5')
+
+    def test_not_configured_returns_503(self):
+        with mock.patch.dict(os.environ, {'RESEND_API_KEY': '', 'FEEDBACK_TO': ''}):
+            response = feedback.submit(self.request(message='hello'))
+
+        self.assertEqual(response.status_code, 503)
+
+    def test_empty_message_is_rejected(self):
+        response = feedback.submit(self.request(message='   '))
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response_json(response)['error'], 'Please enter a message.')
+
+    def test_invalid_reply_email_is_rejected(self):
+        response = feedback.submit(self.request(message='hi', email='not-an-email'))
+
+        self.assertEqual(response.status_code, 400)
+
+    def test_successful_submission_sends_via_resend_and_omits_sender_address(self):
+        with mock.patch.object(feedback, '_send_via_resend') as send_mock:
+            response = feedback.submit(self.request(message='Loved the new layout!', email='visitor@example.com'))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response_json(response), {'ok': True})
+        send_mock.assert_called_once()
+        api_key, payload = send_mock.call_args[0]
+        self.assertEqual(api_key, 'test-key')
+        self.assertEqual(payload['to'], ['owner@example.com'])
+        self.assertEqual(payload['reply_to'], 'visitor@example.com')
+        self.assertEqual(payload['text'], 'Loved the new layout!')
+        # The page never shows feedback@robertmckinnon.au to the visitor; this
+        # asserts the response itself doesn't leak it either.
+        self.assertNotIn('feedback@robertmckinnon.au', response.text)
+
+    def test_rate_limit_blocks_rapid_resubmission(self):
+        with mock.patch.object(feedback, '_send_via_resend'):
+            first = feedback.submit(self.request(message='one'))
+            second = feedback.submit(self.request(message='two'))
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 429)
+
+    def test_upstream_failure_returns_generic_502(self):
+        with mock.patch.object(feedback, '_send_via_resend', side_effect=URLError('boom')):
+            response = feedback.submit(self.request(message='hi'))
+
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn('boom', response.text)
 
 
 if __name__ == '__main__':

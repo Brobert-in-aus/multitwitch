@@ -16,7 +16,7 @@ class WebView:
             normalized = s.strip().lower()
             if re.match(r'^[A-Za-z0-9_]{1,25}$', normalized) and normalized not in uniq_streams:
                 uniq_streams.append(normalized)
-        return {'project' : 'multitwitch',
+        return {'project' : 'StreamMulti',
                 'streams' : uniq_streams,
                 'unique_streams' : uniq_streams,
                 'nstreams' : len(uniq_streams),
