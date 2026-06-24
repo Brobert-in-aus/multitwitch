@@ -405,8 +405,11 @@ body.chat_resizing #chatbox iframe {
 }
 
 #brand_name {
+    align-items: center;
+    display: flex;
     font-size: 20px;
     font-weight: bold;
+    gap: 4px;
 }
 
 #app_version {
@@ -1149,24 +1152,24 @@ body.theater_mode.theater_with_chat .stream_chat {
 }
 
 #help_button {
-    background: #1b222d;
-    border: 1px solid #344054;
+    background: #2a2310;
+    border: 1px solid #7c5e1a;
     border-radius: 50%;
-    color: #98a2b3;
+    color: #fbbf24;
     cursor: pointer;
-    font-size: 11px;
+    font-size: 22px;
     font-weight: bold;
-    height: 17px;
+    height: 34px;
     line-height: 1;
-    margin-left: 4px;
+    margin-left: auto;
     padding: 0;
     vertical-align: middle;
-    width: 17px;
+    width: 34px;
 }
 
 #help_button:hover {
-    background: #263142;
-    color: #f7f7f8;
+    background: #3a3015;
+    color: #fcd34d;
 }
 
 #help_box {
