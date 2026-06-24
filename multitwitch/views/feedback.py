@@ -39,11 +39,16 @@ def submit(request):
         return _json_response({'error': 'Please wait a bit before sending more feedback.'}, status=429)
 
     from_address = os.environ.get('FEEDBACK_FROM', '').strip() or DEFAULT_FROM
+    # Put the submitter's address in the visible body too: reply_to alone is an
+    # invisible header that most clients don't show, and the mail forwarder can
+    # rewrite it, so the address would otherwise be lost.
+    sender_line = 'From: ' + reply_to if reply_to else 'From: (no email provided)'
+    body_text = sender_line + '\n\n' + message
     payload = {
         'from': from_address,
         'to': [to_address],
         'subject': SUBJECT,
-        'text': message,
+        'text': body_text,
     }
     if reply_to:
         payload['reply_to'] = reply_to

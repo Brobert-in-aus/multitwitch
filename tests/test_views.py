@@ -286,10 +286,20 @@ class FeedbackTests(unittest.TestCase):
         self.assertEqual(api_key, 'test-key')
         self.assertEqual(payload['to'], ['owner@example.com'])
         self.assertEqual(payload['reply_to'], 'visitor@example.com')
-        self.assertEqual(payload['text'], 'Loved the new layout!')
+        # The submitter's address is in the visible body as well as reply_to.
+        self.assertEqual(payload['text'], 'From: visitor@example.com\n\nLoved the new layout!')
         # The page never shows feedback@robertmckinnon.au to the visitor; this
         # asserts the response itself doesn't leak it either.
         self.assertNotIn('feedback@robertmckinnon.au', response.text)
+
+    def test_submission_without_email_notes_it_in_body_and_omits_reply_to(self):
+        with mock.patch.object(feedback, '_send_via_resend') as send_mock:
+            response = feedback.submit(self.request(message='Anonymous note'))
+
+        self.assertEqual(response.status_code, 200)
+        _api_key, payload = send_mock.call_args[0]
+        self.assertNotIn('reply_to', payload)
+        self.assertEqual(payload['text'], 'From: (no email provided)\n\nAnonymous note')
 
     def test_rate_limit_blocks_rapid_resubmission(self):
         with mock.patch.object(feedback, '_send_via_resend'):
