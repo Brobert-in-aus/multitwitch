@@ -160,7 +160,8 @@ when all five LITESTREAM_* variables are present. The VPS-side stack, the
 data volume, and the GHCR image all keep the internal "multistream"/
 "multitwitch" naming -- only the public domain and on-page branding changed.
 
-The same container answers on two public domains (see deploy/Caddyfile):
+The same container answers on two public domains (see
+robertmckinnon-au-hosting/caddy/Caddyfile):
 streammulti.live is production, and multistream.robertmckinnon.au is kept
 running as a dev/staging site (e.g. for testing Twitch OAuth or the HLS
 proxy against a real deployed domain instead of localhost). No
@@ -172,8 +173,8 @@ that hop since the container is never reachable except through Caddy).
 A second, stateless Go sidecar (hlsproxy) handles the high-frequency
 /api/hls-proxy* traffic so it isn't bound by Waitress's thread pool; Caddy
 splits that one path to the sidecar while everything else still reaches the
-Pyramid app (see deploy/Caddyfile). The frontend's path contract is
-unchanged -- only the backend selection moved.
+Pyramid app. The frontend's path contract is unchanged -- only the backend
+selection moved.
 
 Deployment artifacts:
 
@@ -183,7 +184,6 @@ Deployment artifacts:
     cmd/hlsproxy/main.go        Go HLS playlist proxy/rewriter sidecar
     Dockerfile.hlsproxy         Image for the hlsproxy sidecar (stateless, no secrets)
     deploy/docker-compose.yml   Production services, volume, env, and networks
-    deploy/Caddyfile            Shared-Caddy reverse proxy blocks (both domains, +hlsproxy split)
     multistream.env.example     VPS environment template (real file mode 600)
     .github/workflows/deploy.yml  GHCR build and VPS deployment workflow
 
@@ -207,9 +207,11 @@ One-time infrastructure setup:
 
        docker network create edge
 
-Every push to master builds and publishes the image, updates the production
-Compose stack, validates Caddy, and reloads the shared proxy. Pushes to master
-should therefore be treated as production deployments.
+Every push to master builds and publishes the image and updates the production
+Compose stack. Shared Caddy routing is deployed only from the
+robertmckinnon-au-hosting repository, whose canonical file contains the
+streammulti.live, multistream.robertmckinnon.au, and /api/hls-proxy* ->
+hlsproxy routing.
 
 Feedback form
 ~~~~~~~~~~~~~

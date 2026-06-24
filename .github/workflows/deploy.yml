@@ -1,5 +1,5 @@
-# Builds -> pushes to GHCR -> syncs compose/Caddyfile to the VPS -> compose up ->
-# reloads the shared Caddy. From the robertmckinnon.au handbook templates/deploy.yml.
+# Builds -> pushes to GHCR -> syncs compose to the VPS -> compose up.
+# Shared Caddy routing is owned by robertmckinnon-au-hosting.
 #
 # Repo secrets required: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PORT (optional).
 # GITHUB_TOKEN is built in (used to push to GHCR).
@@ -19,7 +19,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  STACK_DIR: /opt/multistream        # Option B — independent stack
+  STACK_DIR: /opt/multistream        # Option B - independent stack
 
 jobs:
   quality:
@@ -76,7 +76,7 @@ jobs:
           username: ${{ secrets.DEPLOY_USER }}
           key: ${{ secrets.DEPLOY_SSH_KEY }}
           port: ${{ secrets.DEPLOY_PORT || 22 }}
-          source: "deploy/docker-compose.yml,deploy/Caddyfile"
+          source: "deploy/docker-compose.yml"
           target: ${{ env.STACK_DIR }}
           strip_components: 1
           overwrite: true
@@ -94,24 +94,4 @@ jobs:
             cd ${{ env.STACK_DIR }}
             docker compose pull --ignore-buildable
             docker compose up -d
-
-            # Splice this tool's Caddy block into the single shared Caddyfile,
-            # replaced-or-appended between per-tool markers (idempotent).
-            SHARED=/opt/workout/Caddyfile
-            if [ "${{ env.STACK_DIR }}" != "/opt/workout" ] && [ -f "${{ env.STACK_DIR }}/Caddyfile" ]; then
-              TOOL="$(basename '${{ env.STACK_DIR }}')"
-              S="# >>> ${TOOL} (managed by deploy) >>>"
-              E="# <<< ${TOOL} <<<"
-              TMP="$(mktemp)"
-              awk -v s="$S" -v e="$E" '$0==s{skip=1;next} $0==e{skip=0;next} skip!=1{print}' "$SHARED" > "$TMP"
-              { echo "$S"; cat "${{ env.STACK_DIR }}/Caddyfile"; echo "$E"; } >> "$TMP"
-              # Preserve the bind-mounted file's inode so Caddy sees the update.
-              cat "$TMP" > "$SHARED"
-              rm -f "$TMP"
-            fi
-
-            # Validate + reload the shared edge (Caddy runs in /opt/workout):
-            (cd /opt/workout \
-              && docker compose exec -T caddy caddy validate --config /etc/caddy/Caddyfile \
-              && docker compose exec -T caddy caddy reload --config /etc/caddy/Caddyfile)
             docker image prune -f
