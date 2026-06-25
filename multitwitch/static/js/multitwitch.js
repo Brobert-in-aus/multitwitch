@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "102";
+var APP_VERSION = "103";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1650,12 +1650,23 @@ function attach_hls_stream(tile, name, video, url) {
         var hls = new Hls({
             liveSyncDuration: 4,
             nudgeMaxRetry: 5,
-            // hls.js keeps all played-out media behind the playhead by default
-            // (backBufferLength: Infinity). On a live stream watched for hours,
-            // across several tiles, that SourceBuffer grows without bound until
-            // the tab dies with "Out of Memory". We never scrub backwards, so a
-            // short back buffer is all sync needs; cap it to evict old segments.
-            backBufferLength: 30
+            // Bound the MSE SourceBuffer hard, per tile, so a multi-hour session
+            // across several streams can't climb until the tab dies with "Out of
+            // Memory" (a silent browser-level abort, no console error).
+            //
+            //   backBufferLength   played-out media kept behind the playhead.
+            //                      Default is Infinity -> grows forever. We never
+            //                      scrub backwards, so a few seconds is plenty.
+            //   maxMaxBufferLength the real forward cap. Default 600s lets hls.js
+            //                      balloon each tile to ~10 min of video when
+            //                      bandwidth allows -- the headroom that survived
+            //                      the earlier backBufferLength-only fix.
+            //   maxBufferSize      hard byte cap on the forward buffer; the binding
+            //                      limit for Twitch's high-bitrate renditions.
+            backBufferLength: 10,
+            maxBufferLength: 20,
+            maxMaxBufferLength: 40,
+            maxBufferSize: 30 * 1000 * 1000
         });
         stream_players[name].hls = hls;
         hls.on(Hls.Events.MANIFEST_PARSED, function() {
