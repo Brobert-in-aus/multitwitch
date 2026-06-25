@@ -232,28 +232,28 @@ test("sync tolerance widens the synced dead-band and is clamped", () => {
 });
 
 
-test("engine selection prefers native HLS, uses hls.js for sync and as fallback", () => {
+test("engine selection prefers hls.js wherever it runs, native only as fallback", () => {
     const {context} = loadApplication();
-    const hlsMock = {isSupported: () => true};
-    context.Hls = hlsMock;
-    context.window.Hls = hlsMock;
+    const supportedHls = {isSupported: () => true};
+    const unsupportedHls = {isSupported: () => false};
     const nativeVideo = {
         canPlayType: (type) => (type === "application/vnd.apple.mpegurl" ? "maybe" : "")
     };
     const noNativeVideo = {canPlayType: () => ""};
 
-    // Default (no sync): native is preferred for its lower latency.
-    context.latency_sync_enabled = false;
-    assert.equal(context.desired_player_engine("a", nativeVideo), "native");
-    // No native support -> hls.js.
+    // hls.js available -> always hls.js, even where native HLS is also offered
+    // (Chromium 142+'s native demuxer can't parse Twitch's MPEG-TS).
+    context.Hls = supportedHls;
+    context.window.Hls = supportedHls;
+    assert.equal(context.desired_player_engine("a", nativeVideo), "hls");
     assert.equal(context.desired_player_engine("a", noNativeVideo), "hls");
-    // Sync on -> hls.js even where native is available.
-    context.latency_sync_enabled = true;
-    assert.equal(context.desired_player_engine("a", nativeVideo), "hls");
-    // Native proved unplayable -> pinned to hls.js even without sync.
-    context.latency_sync_enabled = false;
-    context.stream_force_hls_js.a = true;
-    assert.equal(context.desired_player_engine("a", nativeVideo), "hls");
+
+    // hls.js unavailable (e.g. iOS Safari, no MSE) -> native HLS where offered.
+    context.Hls = unsupportedHls;
+    context.window.Hls = unsupportedHls;
+    assert.equal(context.desired_player_engine("a", nativeVideo), "native");
+    // Neither engine available -> nothing to play with.
+    assert.equal(context.desired_player_engine("a", noNativeVideo), null);
 });
 
 
@@ -326,6 +326,7 @@ test("saved unmuted audio is eligible for autoplay restoration", () => {
 test("unlocking audio persists an unmuted master state for refresh", () => {
     const {context, localStorage} = loadApplication();
     context.update_mute_button = () => {};
+    context.update_volume_display = () => {};
     context.sync_active_stream_audio = () => {};
     context.master_muted = true;
     context.master_volume = 0;
@@ -372,6 +373,7 @@ test("autoplay rejection only relocks an optimistic refresh restore", async () =
         play() { return Promise.reject(blocked); }
     };
     context.update_mute_button = () => {};
+    context.update_volume_display = () => {};
     context.sync_active_stream_audio = () => {};
     context.audio_unlocked = true;
     context.audio_restore_pending = true;
@@ -391,7 +393,7 @@ test("autoplay rejection only relocks an optimistic refresh restore", async () =
     assert.equal(video.muted, false);
 });
 
-test("unmuted playback restore starts muted then unmutes after play begins", async () => {
+test("unmuted playback restore plays audibly without a muted unmute dance", async () => {
     const {context} = loadApplication();
     let mutedAtPlay = null;
     const video = {
@@ -407,36 +409,44 @@ test("unmuted playback restore starts muted then unmutes after play begins", asy
     context.apply_video_audio(video, true, 0.7);
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    assert.equal(mutedAtPlay, true);
+    // The element is unmuted before play() so a real autoplay block can reject
+    // (and reach the muted fallback) instead of being masked by a muted play.
+    assert.equal(mutedAtPlay, false);
     assert.equal(video.muted, false);
     assert.equal(video.volume, 0.7);
 });
 
-test("blocked muted startup playback does not relock saved unmuted intent", async () => {
-    const {context} = loadApplication();
+test("blocked audible startup playback falls back to muted, preserving saved intent", async () => {
+    const {context, localStorage} = loadApplication();
     const blocked = new Error("Autoplay blocked");
     blocked.name = "NotAllowedError";
     const video = {
         paused: true,
-        muted: true,
-        volume: 0,
+        muted: false,
+        volume: 0.7,
         play() {
             return Promise.reject(blocked);
         }
     };
     context.update_mute_button = () => {};
+    context.update_volume_display = () => {};
     context.sync_active_stream_audio = () => {};
     context.audio_unlocked = true;
     context.audio_restore_pending = true;
+    context.master_muted = false;
 
     context.apply_video_audio(video, true, 0.7);
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    assert.equal(context.audio_unlocked, true);
-    assert.equal(context.audio_restore_pending, true);
+    // The audible play is refused, so we relock to a muted fallback...
+    assert.equal(context.audio_unlocked, false);
+    assert.equal(context.audio_restore_pending, false);
     assert.equal(video.muted, true);
     assert.equal(video.defaultMuted, true);
-    assert.equal(video.volume, 0.7);
+    assert.equal(video.volume, 0);
+    // ...but the saved unmuted intent survives so a later click restores sound.
+    assert.equal(context.master_muted, false);
+    assert.equal(localStorage.getItem("multitwitch.masterMuted"), null);
 });
 
 
@@ -503,6 +513,7 @@ test("blocked audible autoplay falls back only after a recent block signal", asy
     };
     context.audio_unlocked = true;
     context.update_mute_button = () => { muteButtonUpdates += 1; };
+    context.update_volume_display = () => {};
 
     assert.equal(context.resume_muted_after_blocked_audio(player), false);
     assert.equal(player.video.muted, false);

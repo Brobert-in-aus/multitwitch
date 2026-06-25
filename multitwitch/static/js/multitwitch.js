@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "112";
+var APP_VERSION = "113";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1138,6 +1138,7 @@ function unlock_audio() {
     }
     audio_unlocked = true;
     update_mute_button();
+    update_volume_display();
     sync_active_stream_audio();
 }
 
@@ -1742,19 +1743,24 @@ function attach_hls_stream(tile, name, video, url) {
     play_stream_with_target_audio(name, video);
 }
 
-// hls.js is required for stream sync (native HLS exposes no latency/seek control
-// to drive it) and is the fallback when native can't play a stream or isn't
-// supported. Otherwise native HLS is preferred for its lower latency.
+// hls.js is preferred wherever it runs: it reliably plays Twitch's MPEG-TS and
+// it's required for stream sync (native HLS exposes no latency/seek control).
+// Chromium 142+ (Chrome/Edge, Dec 2025) added a native HLS demuxer, which flips
+// canPlayType() truthy on desktop -- but that demuxer can't parse Twitch's
+// low-latency MPEG-TS prefetch streams (DEMUXER_ERROR_COULD_NOT_PARSE), so an
+// engine policy that preferred native silently routed Twitch into a broken path.
+// We fall back to native HLS only where hls.js isn't available -- notably iOS
+// Safari, where MSE is absent (Hls.isSupported() === false) and native HLS works.
 function desired_player_engine(name, video) {
     var native_supported = !!(video && video.canPlayType("application/vnd.apple.mpegurl"));
     var hls_js_supported = !!(window.Hls && Hls.isSupported());
-    if (hls_js_supported && (latency_sync_enabled || stream_force_hls_js[name] || !native_supported)) {
+    if (hls_js_supported) {
         return "hls";
     }
     if (native_supported) {
         return "native";
     }
-    return hls_js_supported ? "hls" : null;
+    return null;
 }
 
 // Native reported support but may not actually play Twitch's MPEG-TS segments.
@@ -2497,6 +2503,7 @@ function resume_muted_after_blocked_audio(player) {
     set_video_muted(player.video, true);
     player.video.volume = 0.0;
     update_mute_button();
+    update_volume_display();
     if (!player.muted_resume_timer) {
         player.muted_resume_timer = setTimeout(function() {
             player.muted_resume_timer = null;
@@ -2652,6 +2659,7 @@ function handle_blocked_audible_play(video) {
     set_video_muted(video, true);
     video.volume = 0.0;
     update_mute_button();
+    update_volume_display();
     sync_active_stream_audio();
 }
 
@@ -2695,24 +2703,17 @@ function apply_video_audio(video, unmuted, volume) {
         safe_play(video);
         return;
     }
+    // Attempt a genuine audible play. We deliberately do NOT use the older
+    // "play muted, then unmute on the resolved promise" trick: a muted play()
+    // always resolves, so it hid real autoplay refusals from safe_play, and the
+    // later unmute-without-gesture made the browser silently pause the element --
+    // spawning a play -> unmute -> pause loop that stuttered video at the live
+    // edge and never reached the muted fallback. Unmuting up front lets a blocked
+    // play() reject with NotAllowedError, which safe_play catches and drops us to
+    // muted + re-locked; where the browser allows sound, it just plays audibly.
     video.volume = volume;
-    if (video.paused) {
-        set_video_muted(video, true);
-        try {
-            var play_promise = video.play();
-            if (play_promise && play_promise.then) {
-                play_promise.then(function() {
-                    video.volume = volume;
-                    set_video_muted(video, false);
-                }).catch(function() {});
-            } else {
-                set_video_muted(video, false);
-            }
-        } catch (e) {}
-    } else {
-        set_video_muted(video, false);
-        safe_play(video);
-    }
+    set_video_muted(video, false);
+    safe_play(video);
 }
 
 function set_master_volume(value) {
@@ -2759,10 +2760,13 @@ function update_mute_button() {
 
 function update_volume_display() {
     var pct = Math.round(master_volume * 100);
+    // Match the mute button: a browser-blocked (re-locked) audio state reads as
+    // muted even though master_muted is still false, so the readout reflects what
+    // is actually heard rather than the saved percentage.
+    var effectively_muted = master_muted || !audio_unlocked;
     $("#volume_slider").val(pct);
-    // Show "Muted" rather than a percentage so the readout matches what's heard.
-    $("#volume_value").text(master_muted ? "Muted" : pct + "%");
-    $("#volume_slider").closest(".slider_row").toggleClass("is_muted", master_muted);
+    $("#volume_value").text(effectively_muted ? "Muted" : pct + "%");
+    $("#volume_slider").closest(".slider_row").toggleClass("is_muted", effectively_muted);
 }
 
 function destroy_stream_player(name) {
