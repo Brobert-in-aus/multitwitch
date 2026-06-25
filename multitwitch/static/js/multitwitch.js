@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "109";
+var APP_VERSION = "110";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -2628,17 +2628,21 @@ function safe_play(video) {
         var play_promise = video.play();
         if (play_promise && play_promise.catch) {
             play_promise.catch(function(error) {
-                if (audio_restore_pending && !video.muted && error && error.name === "NotAllowedError") {
-                    audio_restore_pending = false;
-                    audio_unlocked = false;
-                    set_video_muted(video, true);
-                    video.volume = 0.0;
-                    update_mute_button();
-                    sync_active_stream_audio();
+                if (!video.muted && error && error.name === "NotAllowedError") {
+                    handle_blocked_audible_play(video);
                 }
             });
         }
     } catch (e) {}
+}
+
+function handle_blocked_audible_play(video) {
+    audio_restore_pending = false;
+    audio_unlocked = false;
+    set_video_muted(video, true);
+    video.volume = 0.0;
+    update_mute_button();
+    sync_active_stream_audio();
 }
 
 function set_video_muted(video, muted) {
@@ -2668,14 +2672,18 @@ function apply_video_audio(video, unmuted, volume) {
     }
     video.volume = volume;
     if (video.paused) {
-        set_video_muted(video, true);
+        set_video_muted(video, false);
         try {
             var play_promise = video.play();
             if (play_promise && play_promise.then) {
                 play_promise.then(function() {
                     video.volume = volume;
                     set_video_muted(video, false);
-                }).catch(function() {});
+                }).catch(function(error) {
+                    if (error && error.name === "NotAllowedError") {
+                        handle_blocked_audible_play(video);
+                    }
+                });
             } else {
                 set_video_muted(video, false);
             }

@@ -362,7 +362,7 @@ test("audible restore clears the element's persistent muted default", () => {
 });
 
 
-test("autoplay rejection only relocks an optimistic refresh restore", async () => {
+test("audible autoplay rejection falls back to muted playback", async () => {
     const {context} = loadApplication();
     const blocked = new Error("Autoplay blocked");
     blocked.name = "NotAllowedError";
@@ -387,8 +387,56 @@ test("autoplay rejection only relocks an optimistic refresh restore", async () =
     context.audio_restore_pending = false;
     context.safe_play(video);
     await new Promise(resolve => setTimeout(resolve, 0));
-    assert.equal(context.audio_unlocked, true);
+    assert.equal(context.audio_unlocked, false);
+    assert.equal(video.muted, true);
+});
+
+test("unmuted playback restore attempts sound before falling back", async () => {
+    const {context} = loadApplication();
+    let mutedAtPlay = null;
+    const video = {
+        paused: true,
+        muted: true,
+        volume: 0,
+        play() {
+            mutedAtPlay = this.muted;
+            return Promise.resolve();
+        }
+    };
+
+    context.apply_video_audio(video, true, 0.7);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(mutedAtPlay, false);
     assert.equal(video.muted, false);
+    assert.equal(video.volume, 0.7);
+});
+
+test("blocked unmuted playback falls back to muted playback", async () => {
+    const {context} = loadApplication();
+    const blocked = new Error("Autoplay blocked");
+    blocked.name = "NotAllowedError";
+    const video = {
+        paused: true,
+        muted: true,
+        volume: 0,
+        play() {
+            return Promise.reject(blocked);
+        }
+    };
+    context.update_mute_button = () => {};
+    context.sync_active_stream_audio = () => {};
+    context.audio_unlocked = true;
+    context.audio_restore_pending = true;
+
+    context.apply_video_audio(video, true, 0.7);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    assert.equal(context.audio_unlocked, false);
+    assert.equal(context.audio_restore_pending, false);
+    assert.equal(video.muted, true);
+    assert.equal(video.defaultMuted, true);
+    assert.equal(video.volume, 0);
 });
 
 
