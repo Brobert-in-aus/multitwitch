@@ -486,7 +486,7 @@ test("buffered paused media is not treated as a dead stream", () => {
 });
 
 
-test("blocked audible autoplay falls back to uninterrupted muted playback", async () => {
+test("blocked audible autoplay falls back only after a recent block signal", async () => {
     const {context} = loadApplication();
     let playCalls = 0;
     let muteButtonUpdates = 0;
@@ -504,6 +504,11 @@ test("blocked audible autoplay falls back to uninterrupted muted playback", asyn
     context.audio_unlocked = true;
     context.update_mute_button = () => { muteButtonUpdates += 1; };
 
+    assert.equal(context.resume_muted_after_blocked_audio(player), false);
+    assert.equal(player.video.muted, false);
+    assert.equal(context.audio_unlocked, true);
+
+    player.last_audible_play_blocked_at = Date.now();
     assert.equal(context.resume_muted_after_blocked_audio(player), true);
     assert.equal(player.video.muted, true);
     assert.equal(player.video.volume, 0);
@@ -520,8 +525,8 @@ test("startup requires sustained timeline progress before becoming ready", () =>
 
     assert.equal(context.startup_progress_is_stable(player, 1000), false);
     assert.equal(player.startup_progress_started_at, 1000);
-    assert.equal(context.startup_progress_is_stable(player, 2999), false);
-    assert.equal(context.startup_progress_is_stable(player, 3000), true);
+    assert.equal(context.startup_progress_is_stable(player, 1749), false);
+    assert.equal(context.startup_progress_is_stable(player, 1750), true);
 
     player.startup_pending = false;
     assert.equal(context.startup_progress_is_stable(player, 5000), false);

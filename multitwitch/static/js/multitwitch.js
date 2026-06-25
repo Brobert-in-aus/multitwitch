@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "111";
+var APP_VERSION = "112";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1577,6 +1577,7 @@ function attach_hls_stream(tile, name, video, url) {
         startup_pending: true,
         startup_started_at: Date.now(),
         startup_progress_started_at: 0,
+        last_audible_play_blocked_at: 0,
         sync_natural_latency: null,
         sync_smoothed_latency: null,
         last_sync_seek_at: 0
@@ -1818,7 +1819,7 @@ function startup_progress_is_stable(player, now) {
         player.startup_progress_started_at = now;
         return false;
     }
-    return now - player.startup_progress_started_at >= 2000;
+    return now - player.startup_progress_started_at >= 750;
 }
 
 function complete_stream_startup(name, player, tile) {
@@ -2489,6 +2490,9 @@ function resume_muted_after_blocked_audio(player) {
     if (!player || !player.video || !player.video.paused || player.video.muted) {
         return false;
     }
+    if (!recent_audible_play_block(player)) {
+        return false;
+    }
     audio_unlocked = false;
     set_video_muted(player.video, true);
     player.video.volume = 0.0;
@@ -2502,6 +2506,11 @@ function resume_muted_after_blocked_audio(player) {
         }, 100);
     }
     return true;
+}
+
+function recent_audible_play_block(player) {
+    return !!(player && player.last_audible_play_blocked_at &&
+        Date.now() - player.last_audible_play_blocked_at < 3000);
 }
 
 function media_is_ready_but_paused(video) {
@@ -2634,12 +2643,26 @@ function safe_play(video) {
 }
 
 function handle_blocked_audible_play(video) {
+    var player = player_for_video(video);
+    if (player) {
+        player.last_audible_play_blocked_at = Date.now();
+    }
     audio_restore_pending = false;
     audio_unlocked = false;
     set_video_muted(video, true);
     video.volume = 0.0;
     update_mute_button();
     sync_active_stream_audio();
+}
+
+function player_for_video(video) {
+    for (var name in stream_players) {
+        if (Object.prototype.hasOwnProperty.call(stream_players, name) &&
+            stream_players[name] && stream_players[name].video === video) {
+            return stream_players[name];
+        }
+    }
+    return null;
 }
 
 function play_stream_with_target_audio(name, video) {
