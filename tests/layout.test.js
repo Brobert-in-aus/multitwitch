@@ -94,6 +94,14 @@ test("saved chat width round-trips through local storage", () => {
     assert.equal(context.load_saved_chat_width(), 338);
 });
 
+test("stream order comparison detects changed drag order", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.same_stream_order(["a", "b"], ["a", "b"]), true);
+    assert.equal(context.same_stream_order(["a", "b"], ["b", "a"]), false);
+    assert.equal(context.same_stream_order(["a", "b"], ["a", "b", "c"]), false);
+});
+
 
 test("Stream Together glow is acknowledged until matches disappear", () => {
     const {context} = loadApplication();

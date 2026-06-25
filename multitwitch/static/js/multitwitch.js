@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "103";
+var APP_VERSION = "105";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -2762,9 +2762,11 @@ function initialize_stream_sorting() {
             stream_drag_pointer = pointer_from_event(event);
             stream_drag_target_name = stream_name_under_pointer(stream_drag_pointer, stream_drag_name);
         },
+        update: function() {
+            sync_stream_order_from_dom();
+        },
         stop: function(event) {
             stream_drag_pointer = pointer_from_event(event) || stream_drag_pointer;
-            apply_stream_drop_replacement();
             setTimeout(function() {
                 stream_dragging = false;
                 stream_drag_name = null;
@@ -2896,6 +2898,7 @@ function reorder_stream_tiles(order) {
 }
 
 function sync_stream_order_from_dom() {
+    var previous_streams = streams.slice();
     streams = $("#streams .stream").map(function() {
         return $(this).attr("data-stream");
     }).get();
@@ -2903,20 +2906,32 @@ function sync_stream_order_from_dom() {
     if (streams.indexOf(active_stream) == -1) {
         active_stream = streams.length ? streams[0] : null;
     }
-    reorder_chat_for_streams();
-    update_url();
+    if (!same_stream_order(previous_streams, streams)) {
+        reorder_chat_for_streams();
+        update_url();
+    }
     sync_active_stream_audio();
     optimize_size(streams.length);
     update_all_stream_tile_metadata();
 }
 
+function same_stream_order(left, right) {
+    if (left.length != right.length) {
+        return false;
+    }
+    for (var i = 0; i < left.length; i++) {
+        if (left[i] != right[i]) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function reorder_chat_for_streams() {
     var tablist = $("#tablist");
-    var chatbox = $("#chatbox");
     for (var i = 0; i < streams.length; i++) {
         var stream = streams[i];
         tablist.append(tablist.find("a[href='#chat-" + stream + "']").parent());
-        chatbox.append($("#chat-" + stream));
     }
     chat_tabs.tabs("refresh");
 }
