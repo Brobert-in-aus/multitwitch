@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "110";
+var APP_VERSION = "111";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1738,7 +1738,7 @@ function attach_hls_stream(tile, name, video, url) {
         set_player_status(tile, "This browser cannot play HLS streams.");
         return;
     }
-    safe_play(video);
+    play_stream_with_target_audio(name, video);
 }
 
 // hls.js is required for stream sync (native HLS exposes no latency/seek control
@@ -1843,7 +1843,7 @@ function retry_hls_startup_play(name, hls, video) {
     }
     player.resume_blocked = false;
     player.last_progress_at = Date.now();
-    safe_play(video);
+    play_stream_with_target_audio(name, video);
 }
 
 function sanitize_playback_url(value) {
@@ -2405,10 +2405,7 @@ function ensure_stream_playing(name) {
             // NotAllowedError and drops us to muted + re-locked; a later tick then
             // sees the muted target and keeps video flowing. This preserves
             // unmuted autoplay where the browser allows it.
-            var target = stream_audio_target(name);
-            set_video_muted(player.video, target.muted);
-            player.video.volume = target.muted ? 0.0 : target.volume;
-            safe_play(player.video);
+            play_stream_with_target_audio(name, player.video);
         }
         return;
     }
@@ -2628,7 +2625,7 @@ function safe_play(video) {
         var play_promise = video.play();
         if (play_promise && play_promise.catch) {
             play_promise.catch(function(error) {
-                if (!video.muted && error && error.name === "NotAllowedError") {
+                if (audio_restore_pending && !video.muted && error && error.name === "NotAllowedError") {
                     handle_blocked_audible_play(video);
                 }
             });
@@ -2643,6 +2640,11 @@ function handle_blocked_audible_play(video) {
     video.volume = 0.0;
     update_mute_button();
     sync_active_stream_audio();
+}
+
+function play_stream_with_target_audio(name, video) {
+    var target = stream_audio_target(name);
+    apply_video_audio(video, !target.muted, target.volume);
 }
 
 function set_video_muted(video, muted) {
@@ -2672,18 +2674,14 @@ function apply_video_audio(video, unmuted, volume) {
     }
     video.volume = volume;
     if (video.paused) {
-        set_video_muted(video, false);
+        set_video_muted(video, true);
         try {
             var play_promise = video.play();
             if (play_promise && play_promise.then) {
                 play_promise.then(function() {
                     video.volume = volume;
                     set_video_muted(video, false);
-                }).catch(function(error) {
-                    if (error && error.name === "NotAllowedError") {
-                        handle_blocked_audible_play(video);
-                    }
-                });
+                }).catch(function() {});
             } else {
                 set_video_muted(video, false);
             }
