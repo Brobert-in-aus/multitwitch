@@ -28,6 +28,8 @@ def routes(config):
     config.add_view(twitch.followed_streams, route_name='twitch_followed_streams')
     config.add_route('twitch_streams', '/api/twitch/streams')
     config.add_view(twitch.streams, route_name='twitch_streams')
+    config.add_route('twitch_public_streams', '/api/twitch/public-streams')
+    config.add_view(twitch.public_streams, route_name='twitch_public_streams')
     config.add_route('twitch_live_status', '/api/twitch/live-status/{channel}')
     config.add_view(twitch.live_status, route_name='twitch_live_status')
     config.add_route('twitch_users', '/api/twitch/users')

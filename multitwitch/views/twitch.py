@@ -101,6 +101,21 @@ query ChannelLiveStatus($login: String!) {
   }
 }
 '''
+CHANNEL_METADATA_QUERY = '''
+query ChannelMetadata($login: String!) {
+  user(login: $login) {
+    login
+    displayName
+    stream {
+      id
+      title
+      game {
+        name
+      }
+    }
+  }
+}
+'''
 
 
 def auth_start(request):
@@ -263,6 +278,23 @@ def streams(request):
     })
 
 
+def public_streams(request):
+    logins = request.params.getall('user_login') or [request.params.get('user_login')]
+    logins = _valid_unique_logins(logins, limit=100)
+    if logins is None:
+        return _json_response({'error': 'Invalid Twitch channel.'}, status=400)
+
+    data = []
+    try:
+        for login in logins:
+            metadata = channel_metadata(login)
+            if metadata:
+                data.append(metadata)
+    except TwitchRequestError as exc:
+        return _json_response({'error': exc.message}, status=exc.status)
+    return _json_response({'data': data})
+
+
 def channel_is_live(login):
     data = _gql_request({
         'operationName': 'ChannelLiveStatus',
@@ -271,6 +303,26 @@ def channel_is_live(login):
     })
     user = (data.get('data') or {}).get('user')
     return bool(user and user.get('stream'))
+
+
+def channel_metadata(login):
+    data = _gql_request({
+        'operationName': 'ChannelMetadata',
+        'query': CHANNEL_METADATA_QUERY,
+        'variables': {'login': login},
+    })
+    user = (data.get('data') or {}).get('user')
+    if not user:
+        return None
+    stream = user.get('stream') or {}
+    game = stream.get('game') or {}
+    return {
+        'user_login': (user.get('login') or login).lower(),
+        'user_name': user.get('displayName') or user.get('login') or login,
+        'title': stream.get('title') or '',
+        'game_name': game.get('name') or '',
+        'live': bool(stream.get('id')),
+    }
 
 
 def live_status(request):
@@ -390,6 +442,21 @@ def _flatten_proxy_params(params):
         else:
             pairs.append((key, value))
     return pairs
+
+
+def _valid_unique_logins(logins, limit):
+    valid = []
+    seen = set()
+    for login in logins:
+        login = (login or '').strip().lower()
+        if not CHANNEL_RE.match(login):
+            return None
+        if login not in seen:
+            seen.add(login)
+            valid.append(login)
+            if len(valid) >= limit:
+                break
+    return valid
 
 
 def _require_authenticated_session(request):

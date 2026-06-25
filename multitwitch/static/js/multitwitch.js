@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "105";
+var APP_VERSION = "109";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -935,7 +935,7 @@ function create_player_for_tile(tile) {
 }
 
 function update_all_stream_tile_metadata() {
-    $("#streams .stream").each(function() {
+    stream_tiles_for_state().each(function() {
         update_stream_tile_metadata($(this));
     });
 }
@@ -950,19 +950,47 @@ function update_stream_tile_metadata(tile) {
 }
 
 function load_current_stream_metadata() {
-    if (!twitch_user || streams.length == 0) {
+    if (streams.length == 0) {
         update_all_stream_tile_metadata();
         return;
     }
+    if (!twitch_user) {
+        load_public_stream_metadata();
+        return;
+    }
     twitch_api("streams", {user_login: streams, first: 100}, function(data) {
-        var live = data.data || [];
-        for (var i = 0; i < live.length; i++) {
-            stream_metadata[live[i].user_login.toLowerCase()] = live[i];
-        }
+        cache_stream_metadata(data.data || []);
         update_all_stream_tile_metadata();
     }, function() {
-        update_all_stream_tile_metadata();
+        load_public_stream_metadata();
     });
+}
+
+function load_public_stream_metadata() {
+    if (streams.length == 0) {
+        update_all_stream_tile_metadata();
+        return;
+    }
+    $.ajax({
+        url: "/api/twitch/public-streams",
+        data: {user_login: streams},
+        traditional: true,
+        success: function(data) {
+            cache_stream_metadata(data.data || []);
+            update_all_stream_tile_metadata();
+        },
+        error: function() {
+            update_all_stream_tile_metadata();
+        }
+    });
+}
+
+function cache_stream_metadata(live) {
+    for (var i = 0; i < (live || []).length; i++) {
+        if (live[i].user_login) {
+            stream_metadata[live[i].user_login.toLowerCase()] = live[i];
+        }
+    }
 }
 
 function set_active_stream(name) {
@@ -1028,6 +1056,14 @@ function initialize_audio_settings() {
 
 function saved_audio_should_start_unlocked(saved_muted) {
     return !saved_muted;
+}
+
+function remember_unmuted_audio_state() {
+    master_muted = false;
+    if (master_volume <= 0) {
+        master_volume = 0.70;
+    }
+    persist_audio_settings();
 }
 
 function persist_audio_settings() {
@@ -1096,6 +1132,7 @@ function save_active_stream(name) {
 
 function unlock_audio() {
     audio_restore_pending = false;
+    remember_unmuted_audio_state();
     if (audio_unlocked) {
         return;
     }
@@ -2745,6 +2782,7 @@ function initialize_stream_sorting() {
         helper: "clone",
         items: ".stream",
         opacity: 0.85,
+        placeholder: "stream_sort_placeholder",
         scroll: false,
         tolerance: "pointer",
         start: function(event, ui) {
@@ -2753,14 +2791,17 @@ function initialize_stream_sorting() {
             stream_drag_order = streams.slice();
             stream_drag_pointer = pointer_from_event(event);
             stream_drag_target_name = null;
+            sync_sortable_preview_size(ui);
         },
-        sort: function(event) {
+        sort: function(event, ui) {
             stream_drag_pointer = pointer_from_event(event);
             stream_drag_target_name = stream_name_under_pointer(stream_drag_pointer, stream_drag_name);
+            sync_sortable_preview_size(ui);
         },
-        change: function(event) {
+        change: function(event, ui) {
             stream_drag_pointer = pointer_from_event(event);
             stream_drag_target_name = stream_name_under_pointer(stream_drag_pointer, stream_drag_name);
+            sync_sortable_preview_size(ui);
         },
         update: function() {
             sync_stream_order_from_dom();
@@ -2776,6 +2817,43 @@ function initialize_stream_sorting() {
             }, 0);
         }
     });
+}
+
+function sync_sortable_preview_size(ui) {
+    if (!ui || !ui.placeholder || !ui.placeholder.length) {
+        return;
+    }
+    var slot_index = sortable_placeholder_index(ui.placeholder);
+    var slot_size = sortable_slot_size(slot_index);
+    if (!slot_size) {
+        return;
+    }
+    ui.placeholder.width(slot_size.w).height(slot_size.h);
+    if (ui.helper && ui.helper.length) {
+        ui.helper.width(slot_size.w).height(slot_size.h);
+    }
+}
+
+function sortable_placeholder_index(placeholder) {
+    var children = $("#streams").children(".stream, .stream_sort_placeholder").filter(function() {
+        return !$(this).hasClass("ui-sortable-helper");
+    });
+    var index = children.index(placeholder);
+    return index < 0 ? 0 : index;
+}
+
+function sortable_slot_size(index) {
+    var tiles = stream_tiles_for_state();
+    if (!tiles.length) {
+        return null;
+    }
+    var main_count = main_tile_count();
+    var selector = main_count > 0 && index < main_count ? ".is_main" : ":not(.is_main)";
+    var reference = tiles.filter(selector).first();
+    if (!reference.length) {
+        reference = tiles.first();
+    }
+    return {w: reference.width(), h: reference.height()};
 }
 
 function load_saved_chat_width() {
@@ -2854,10 +2932,10 @@ function stream_name_under_pointer(pointer, exclude_name) {
     var viewport_x = pointer.page_x - $(window).scrollLeft();
     var viewport_y = pointer.page_y - $(window).scrollTop();
     var target = null;
-    $("#streams .stream").each(function() {
+    stream_tiles_for_state().each(function() {
         var tile = $(this);
         var name = tile.attr("data-stream");
-        if (!name || name == exclude_name || tile.hasClass("ui-sortable-helper")) {
+        if (!name || name == exclude_name) {
             return;
         }
         var rect = this.getBoundingClientRect();
@@ -2899,7 +2977,7 @@ function reorder_stream_tiles(order) {
 
 function sync_stream_order_from_dom() {
     var previous_streams = streams.slice();
-    streams = $("#streams .stream").map(function() {
+    streams = stream_tiles_for_state().map(function() {
         return $(this).attr("data-stream");
     }).get();
     // Keep the chosen audio stream; only fall back if it's no longer present.
@@ -2913,6 +2991,14 @@ function sync_stream_order_from_dom() {
     sync_active_stream_audio();
     optimize_size(streams.length);
     update_all_stream_tile_metadata();
+}
+
+function stream_tiles_for_state() {
+    return $("#streams .stream").filter(function() {
+        return !$(this).hasClass("ui-sortable-helper") &&
+            !$(this).hasClass("ui-sortable-placeholder") &&
+            !$(this).hasClass("stream_sort_placeholder");
+    });
 }
 
 function same_stream_order(left, right) {
@@ -3533,6 +3619,7 @@ function initialize_twitch() {
                 $("#twitch_connect_button").prop("disabled", true);
                 $("#twitch_disconnect_button").hide();
                 set_twitch_hint("Set twitch.client_id, twitch.client_secret, and twitch.redirect_uri in the app config.");
+                load_current_stream_metadata();
                 return;
             }
 
@@ -3544,6 +3631,7 @@ function initialize_twitch() {
                 set_twitch_state("Offline", "offline");
                 $("#twitch_disconnect_button").hide();
                 set_twitch_hint(data.message || "Connect Twitch to load followed channels.");
+                load_current_stream_metadata();
                 return;
             }
 
@@ -3560,6 +3648,7 @@ function initialize_twitch() {
         error: function() {
             set_twitch_state("Error", "error");
             set_twitch_hint("Could not check Twitch session.");
+            load_current_stream_metadata();
         }
     });
 }
@@ -3724,9 +3813,9 @@ function poll_go_live() {
         for (var key in now_live) {
             if (Object.prototype.hasOwnProperty.call(now_live, key)) {
                 twitch_live_channels[key] = now_live[key];
-                stream_metadata[key.toLowerCase()] = now_live[key];
             }
         }
+        cache_stream_metadata(live);
         render_followed_channels();
     }, function() {});
 }
@@ -3825,8 +3914,8 @@ function load_followed_live_streams() {
         var live = data.data || [];
         for (var i = 0; i < live.length; i++) {
             twitch_live_channels[live[i].user_login] = live[i];
-            stream_metadata[live[i].user_login.toLowerCase()] = live[i];
         }
+        cache_stream_metadata(live);
         render_followed_channels();
         render_current_streams();
         update_all_stream_tile_metadata();

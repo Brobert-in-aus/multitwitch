@@ -298,9 +298,12 @@ iframe {
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.65);
 }
 
-.ui-sortable-placeholder {
+.ui-sortable-placeholder,
+.stream_sort_placeholder {
     background: rgba(34, 211, 238, 0.14);
+    box-sizing: border-box;
     border: 1px dashed #22d3ee;
+    display: block;
     visibility: visible !important;
 }
 

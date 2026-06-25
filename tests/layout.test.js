@@ -127,6 +127,20 @@ test("live-stream indexing drops channels absent from the latest poll", () => {
     assert.equal(indexed.now_offline, undefined);
 });
 
+test("stream metadata cache indexes logins case-insensitively", () => {
+    const {context} = loadApplication();
+
+    context.cache_stream_metadata([
+        {user_login: "GamesDoneQuick", title: "Speedruns", game_name: "Celeste"},
+        {user_login: "other_channel", title: "Other", game_name: "Just Chatting"},
+        {title: "Ignored"}
+    ]);
+
+    assert.equal(context.stream_metadata.gamesdonequick.title, "Speedruns");
+    assert.equal(context.stream_metadata.other_channel.game_name, "Just Chatting");
+    assert.equal(context.stream_metadata.undefined, undefined);
+});
+
 
 test("latency sync targets the slowest natural stream plus extra buffer", () => {
     const {context, localStorage} = loadApplication();
@@ -307,6 +321,22 @@ test("saved unmuted audio is eligible for autoplay restoration", () => {
 
     assert.equal(context.saved_audio_should_start_unlocked(false), true);
     assert.equal(context.saved_audio_should_start_unlocked(true), false);
+});
+
+test("unlocking audio persists an unmuted master state for refresh", () => {
+    const {context, localStorage} = loadApplication();
+    context.update_mute_button = () => {};
+    context.sync_active_stream_audio = () => {};
+    context.master_muted = true;
+    context.master_volume = 0;
+
+    context.unlock_audio();
+
+    assert.equal(context.audio_unlocked, true);
+    assert.equal(context.master_muted, false);
+    assert.equal(context.master_volume, 0.7);
+    assert.equal(localStorage.getItem("multitwitch.masterMuted"), "false");
+    assert.equal(localStorage.getItem("multitwitch.masterVolume"), "0.7");
 });
 
 

@@ -196,6 +196,11 @@ class HlsProxyTests(unittest.TestCase):
 
 
 class TwitchViewTests(unittest.TestCase):
+    class Params(dict):
+        def getall(self, key):
+            value = self.get(key)
+            return value if isinstance(value, list) else ([value] if value is not None else [])
+
     def test_channel_is_live_uses_stream_presence(self):
         with mock.patch.object(twitch, '_gql_request', return_value={
             'data': {'user': {'stream': {'id': '123'}}},
@@ -211,6 +216,49 @@ class TwitchViewTests(unittest.TestCase):
         request = SimpleNamespace(matchdict={'channel': 'bad-channel'})
 
         response = twitch.live_status(request)
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response_json(response)['error'], 'Invalid Twitch channel.')
+
+    def test_channel_metadata_maps_public_gql_response(self):
+        with mock.patch.object(twitch, '_gql_request', return_value={
+            'data': {'user': {
+                'login': 'gamesdonequick',
+                'displayName': 'GamesDoneQuick',
+                'stream': {
+                    'id': '123',
+                    'title': 'Speedruns',
+                    'game': {'name': 'Celeste'},
+                },
+            }},
+        }):
+            metadata = twitch.channel_metadata('gamesdonequick')
+
+        self.assertEqual(metadata, {
+            'user_login': 'gamesdonequick',
+            'user_name': 'GamesDoneQuick',
+            'title': 'Speedruns',
+            'game_name': 'Celeste',
+            'live': True,
+        })
+
+    def test_public_streams_returns_loaded_stream_metadata_without_auth(self):
+        request = SimpleNamespace(params=self.Params({'user_login': ['GamesDoneQuick', 'other_channel']}))
+        with mock.patch.object(twitch, 'channel_metadata', side_effect=[
+            {'user_login': 'gamesdonequick', 'user_name': 'GamesDoneQuick', 'title': 'Live', 'game_name': 'Game', 'live': True},
+            None,
+        ]):
+            response = twitch.public_streams(request)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response_json(response)['data'], [
+            {'user_login': 'gamesdonequick', 'user_name': 'GamesDoneQuick', 'title': 'Live', 'game_name': 'Game', 'live': True},
+        ])
+
+    def test_public_streams_rejects_invalid_channel(self):
+        request = SimpleNamespace(params=self.Params({'user_login': ['bad-channel']}))
+
+        response = twitch.public_streams(request)
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response_json(response)['error'], 'Invalid Twitch channel.')
