@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "113";
+var APP_VERSION = "114";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1132,11 +1132,18 @@ function save_active_stream(name) {
 
 function unlock_audio() {
     audio_restore_pending = false;
-    remember_unmuted_audio_state();
+    // A document-level click/keydown calls this on every interaction to lift the
+    // browser's autoplay lock. Once audio is already unlocked it must be a no-op:
+    // forcing the unmuted state here would override an explicit master mute (and,
+    // because of the early return, leave the icon/readout showing the stale
+    // state) -- which is exactly what broke "click anywhere re-mutes" and the
+    // mute-button toggle. Only clear the mute and restore volume when we are
+    // genuinely transitioning out of the locked state.
     if (audio_unlocked) {
         return;
     }
     audio_unlocked = true;
+    remember_unmuted_audio_state();
     update_mute_button();
     update_volume_display();
     sync_active_stream_audio();

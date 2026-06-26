@@ -341,6 +341,50 @@ test("unlocking audio persists an unmuted master state for refresh", () => {
 });
 
 
+test("clicking the page while already unlocked does not override an explicit mute", () => {
+    const {context} = loadApplication();
+    let syncs = 0;
+    context.update_mute_button = () => {};
+    context.update_volume_display = () => {};
+    context.sync_active_stream_audio = () => { syncs += 1; };
+    // User has interacted and then deliberately muted the master.
+    context.audio_unlocked = true;
+    context.master_muted = true;
+    context.master_volume = 0.7;
+
+    // A stray document click (set_active_stream / the audio-unlock handler) must
+    // leave the mute intact rather than silently un-muting and desyncing the UI.
+    context.unlock_audio();
+
+    assert.equal(context.master_muted, true);
+    assert.equal(context.master_volume, 0.7);
+    assert.equal(syncs, 0);
+    assert.equal(context.audio_restore_pending, false);
+});
+
+
+test("master mute button toggles cleanly in both directions", () => {
+    const {context} = loadApplication();
+    context.update_mute_button = () => {};
+    context.update_volume_display = () => {};
+    context.sync_active_stream_audio = () => {};
+    context.audio_unlocked = true;
+    context.master_muted = false;
+    context.master_volume = 0.7;
+
+    // Mute, then the click bubbles to the document audio-unlock handler.
+    context.toggle_master_mute();
+    context.unlock_audio();
+    assert.equal(context.master_muted, true);
+
+    // Unmute, then the same bubbling click -- the toggle must stick at unmuted
+    // instead of being reset back to muted by unlock_audio.
+    context.toggle_master_mute();
+    context.unlock_audio();
+    assert.equal(context.master_muted, false);
+});
+
+
 test("audible restore clears the element's persistent muted default", () => {
     const {context} = loadApplication();
     const attributes = new Set(["muted"]);
