@@ -214,6 +214,17 @@ test("convergence correction holds a dead-band, nudges asymmetrically, seeks big
     assert.equal(ahead.seek_to, null);
     assert.ok(ahead.playback_rate < 1 && ahead.playback_rate >= 0.95);
 
+    // A thin forward buffer vetoes speed-ups (they'd starve playback into the
+    // delivery frontier) but not slow-downs or seeks.
+    const starved = context.convergence_correction(2.0, 100, 80, 120, 1.0);
+    assert.equal(starved.playback_rate, 1);
+    assert.equal(starved.seek_to, null);
+    const fed = context.convergence_correction(2.0, 100, 80, 120, 5.0);
+    assert.ok(fed.playback_rate > 1);
+    const slowLowBuf = context.convergence_correction(-2.0, 100, 80, 120, 1.0);
+    assert.ok(slowLowBuf.playback_rate < 1);
+    assert.equal(context.convergence_correction(6, 100, 80, 120, 0.5).seek_to, 106);
+
     // Past the seek threshold -> jump, clamped inside the seekable range.
     const jump = context.convergence_correction(6, 100, 80, 120);
     assert.equal(jump.seek_to, 106);
@@ -283,10 +294,10 @@ test("convergence steers every healthy stream toward the shared wall", () => {
             }
         };
     }
-    // Slowest edge (base-6000) defines the wall: target = base - 10000.
-    context.stream_players.slow = fakePlayer(-6000, -10100);  // 0.1s off -> dead-band
-    context.stream_players.fast = fakePlayer(-4000, -12000);  // 2s behind -> speeds up
-    context.stream_players.lost = fakePlayer(-5000, -20000);  // 10s behind -> seeks
+    // Slowest edge (base-6000) defines the wall: target = base - 12000.
+    context.stream_players.slow = fakePlayer(-6000, -12100);  // 0.1s off -> dead-band
+    context.stream_players.fast = fakePlayer(-4000, -14000);  // 2s behind -> speeds up
+    context.stream_players.lost = fakePlayer(-5000, -22000);  // 10s behind -> seeks
 
     context.run_convergence();
 
@@ -334,6 +345,47 @@ test("the nosync kill switch leaves playback untouched", () => {
 });
 
 
+test("the wall can never demand a stream play inside its own holdback", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    function fakePlayer(edgeOffsetMs, playingOffsetMs, ownLatency) {
+        return {
+            engine: "hls",
+            manual_paused: false,
+            recovering: false,
+            startup_pending: false,
+            last_convergence_seek_at: 0,
+            hls: {
+                latency: ownLatency,
+                playingDate: new Date(base + playingOffsetMs),
+                latestLevelDetails: {
+                    live: true,
+                    age: 0,
+                    fragments: [{programDateTime: base + edgeOffsetMs - 2000, duration: 2}]
+                }
+            },
+            video: {
+                currentTime: 100,
+                playbackRate: 1,
+                seekable: {length: 1, start: () => 50, end: () => 120}
+            }
+        };
+    }
+    // Anchor on the wall (edge -2000 -> wall = base - 8000).
+    context.stream_players.anchor = fakePlayer(-2000, -8100, 6);
+    // The victim's PDT math says 10s behind the wall (a hard seek), but its own
+    // measured latency is 7s -- only 1s of forward room exists before the
+    // delivery frontier. The clamp turns the seek into a gentle nudge.
+    context.stream_players.victim = fakePlayer(-2000, -18000, 7);
+
+    context.run_convergence();
+
+    assert.equal(context.stream_players.victim.video.currentTime, 100);
+    const rate = context.stream_players.victim.video.playbackRate;
+    assert.ok(rate > 1 && rate <= 1.15, "clamped to a nudge, not a seek: " + rate);
+});
+
+
 test("a channel with a broken PDT clock self-holds instead of poisoning the wall", () => {
     const {context} = loadApplication();
     const base = Date.now();
@@ -363,8 +415,8 @@ test("a channel with a broken PDT clock self-holds instead of poisoning the wall
 
     context.run_convergence();
 
-    // latency 10 vs holdback 4 -> 6s behind -> seeks forward by 6s.
-    assert.equal(context.stream_players.broken.video.currentTime, 106);
+    // latency 10 vs holdback 6 -> 4s behind -> at the seek threshold, jumps 4s.
+    assert.equal(context.stream_players.broken.video.currentTime, 104);
 });
 
 
@@ -394,24 +446,24 @@ test("snap-to-live seeks to the shared wall, not the raw edge", () => {
             }
         };
     }
-    // Anchor sits exactly on the wall (edge -6000 -> wall = base - 10000).
-    context.stream_players.anchor = fakePlayer(-6000, -10000, 100);
-    // The lagging player is 5s behind the wall; ⟳ jumps it straight there.
+    // Anchor sits exactly on the wall (edge -6000 -> wall = base - 12000).
+    context.stream_players.anchor = fakePlayer(-6000, -12000, 100);
+    // The lagging player is 3s behind the wall; ⟳ jumps it straight there.
     context.stream_players.lagging = fakePlayer(-4000, -15000, 100);
 
     context.snap_player_to_live(context.stream_players.lagging);
 
-    assert.equal(context.stream_players.lagging.video.currentTime, 105);
+    assert.equal(context.stream_players.lagging.video.currentTime, 103);
     assert.equal(context.stream_players.lagging.hls.startLoadCalls, 1);
     assert.equal(context.stream_players.lagging.hls.lastStart, -1);
 
     // Single stream: the wall degenerates to its own edge minus the holdback,
-    // so ⟳ lands 4s back -- where the controller would hold it anyway.
+    // so ⟳ lands 6s back -- where the controller would hold it anyway.
     delete context.stream_players.anchor;
     delete context.stream_players.lagging;
     context.stream_players.solo = fakePlayer(-1000, -9000, 100);
     context.snap_player_to_live(context.stream_players.solo);
-    assert.equal(context.stream_players.solo.video.currentTime, 104);
+    assert.equal(context.stream_players.solo.video.currentTime, 102);
 });
 
 
@@ -439,14 +491,14 @@ test("snap-to-live falls back to just-behind-the-edge without PDT", () => {
 test("startup bias raises the hold-back so new streams are born on the wall", () => {
     const {context} = loadApplication();
     const base = Date.now();
-    // Healthy anchor already playing on the wall (edge -6000 -> wall -10000).
+    // Healthy anchor already playing on the wall (edge -6000 -> wall -12000).
     context.stream_players.anchor = {
         engine: "hls",
         manual_paused: false,
         recovering: false,
         startup_pending: false,
         hls: {
-            playingDate: new Date(base - 10000),
+            playingDate: new Date(base - 12000),
             latestLevelDetails: {
                 live: true,
                 age: 0,
@@ -455,7 +507,7 @@ test("startup bias raises the hold-back so new streams are born on the wall", ()
         },
         video: {currentTime: 100, seekable: {length: 1, start: () => 50, end: () => 120}}
     };
-    const hls = {config: {liveSyncDuration: 4}};
+    const hls = {config: {liveSyncDuration: 6}};
     context.stream_players.fresh = {engine: "hls", startup_pending: true, hls};
     function details(edgeOffsetMs) {
         return {
@@ -465,26 +517,26 @@ test("startup bias raises the hold-back so new streams are born on the wall", ()
         };
     }
 
-    // Fast channel (edge -1000) joining a slower group: start 9s back, on the
-    // wall, instead of 4s back and ahead of it.
+    // Fast channel (edge -1000) joining a slower group: start 11s back, on the
+    // wall, instead of 6s back and ahead of it.
     context.bias_startup_toward_wall("fresh", hls, details(-1000));
-    assert.equal(hls.config.liveSyncDuration, 9);
+    assert.equal(hls.config.liveSyncDuration, 11);
 
     // A channel slower than the wall never starts closer than the holdback.
     context.bias_startup_toward_wall("fresh", hls, details(-13000));
-    assert.equal(hls.config.liveSyncDuration, 4);
+    assert.equal(hls.config.liveSyncDuration, 6);
 
     // After startup the bias no-ops (the convergence tick has authority).
-    hls.config.liveSyncDuration = 4;
+    hls.config.liveSyncDuration = 6;
     context.stream_players.fresh.startup_pending = false;
     context.bias_startup_toward_wall("fresh", hls, details(-1000));
-    assert.equal(hls.config.liveSyncDuration, 4);
+    assert.equal(hls.config.liveSyncDuration, 6);
 
     // No other healthy players -> no wall -> default hold-back stands.
     context.stream_players.fresh.startup_pending = true;
     delete context.stream_players.anchor;
     context.bias_startup_toward_wall("fresh", hls, details(-1000));
-    assert.equal(hls.config.liveSyncDuration, 4);
+    assert.equal(hls.config.liveSyncDuration, 6);
 });
 
 

@@ -65,8 +65,16 @@ var QUALITY_ADAPT_DELAY = 10000;
 // is no mode and no toggle. Replaced the experimental latency-sync feature.
 var CONVERGENCE_INTERVAL = 1000;
 // Matches liveSyncDuration below: how far behind the slowest channel's ingest
-// edge the shared instant sits (~2 segments of cushion).
-var CONVERGENCE_HOLDBACK = 4;
+// edge the shared instant sits. 3 segments, not 2: the prefetch-promoted edge
+// is essentially realtime, but the newest segment is drip-fed as it's produced,
+// so the *downloadable* frontier measured ~3.5s (worst ~5s) behind the edge on
+// live Twitch TS streams. A 4s holdback sat inside that zone and starved the
+// buffer (speed up -> stall -> fall back -> loop); 6s leaves ~2s of cushion.
+var CONVERGENCE_HOLDBACK = 6;
+// Forward-buffer floor for rate increases. Speeding up with a thin buffer just
+// drives the playhead into the delivery frontier no matter where the wall is,
+// so catch-up waits until at least this much media is buffered ahead.
+var CONVERGENCE_MIN_BUFFER = 3;
 // The PDT signal has no per-segment sawtooth, so the dead-band only needs to
 // cover playlist fetch jitter and cross-channel ingest-timestamp skew.
 var CONVERGENCE_DEADBAND = 0.3;
@@ -1677,18 +1685,19 @@ function attach_hls_stream(tile, name, video, url) {
     var engine = desired_player_engine(name, video);
     stream_players[name].engine = engine;
     if (engine === "hls") {
-        // Start ~4s behind the (prefetch-promoted, genuinely-live) edge. We use
-        // liveSyncDuration in seconds rather than a segment count because Twitch
-        // can report a large target duration; with lowLatencyMode on, hls.js
-        // derived its hold-back from 3x that and started ~18s back. An absolute
-        // value pins the start near live regardless. lowLatencyMode is off (it
-        // gave no benefit for Twitch's non-standard prefetch and drove the
-        // latency controller to seek/fight the app's own sync); we also avoid
+        // Start CONVERGENCE_HOLDBACK behind the (prefetch-promoted) edge, so a
+        // fresh stream lands on or near the shared wall. We use liveSyncDuration
+        // in seconds rather than a segment count because Twitch can report a
+        // large target duration; with lowLatencyMode on, hls.js derived its
+        // hold-back from 3x that and started ~18s back. An absolute value pins
+        // the start near live regardless. lowLatencyMode is off (it gave no
+        // benefit for Twitch's non-standard prefetch and drove the latency
+        // controller to seek/fight the app's own steering); we also avoid
         // maxLiveSyncPlaybackRate / liveMaxLatencyDurationCount for the same
         // reason. The earlier "needs a click to start" was an autoplay-blocker
         // browser extension, not this config.
         var hls = new Hls({
-            liveSyncDuration: 4,
+            liveSyncDuration: CONVERGENCE_HOLDBACK,
             nudgeMaxRetry: 5,
             // Bound the MSE SourceBuffer hard, per tile, so a multi-hour session
             // across several streams can't climb until the tab dies with "Out of
@@ -2147,8 +2156,10 @@ function compute_convergence_target(edges, holdback_seconds, straggler_limit_sec
 // Within the dead-band: converged, leave it alone. Up to the seek threshold:
 // proportional rate nudge with asymmetric caps (speeding toward live is far
 // less noticeable than slowing). Past the threshold: a visible seek, clamped
-// inside the seekable range.
-function convergence_correction(behind, current_time, seek_start, seek_end) {
+// inside the seekable range. buffered_ahead (optional, seconds of media
+// buffered past the playhead) gates speed-ups: with a thin buffer a rate
+// increase can only starve playback, so hold 1x and let the buffer refill.
+function convergence_correction(behind, current_time, seek_start, seek_end, buffered_ahead) {
     var magnitude = Math.abs(behind);
     if (magnitude >= CONVERGENCE_SEEK_THRESHOLD) {
         var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + behind));
@@ -2157,11 +2168,29 @@ function convergence_correction(behind, current_time, seek_start, seek_end) {
     if (magnitude < CONVERGENCE_DEADBAND) {
         return {seek_to: null, playback_rate: 1};
     }
+    if (behind > 0 && buffered_ahead !== null && buffered_ahead !== undefined &&
+        buffered_ahead < CONVERGENCE_MIN_BUFFER) {
+        return {seek_to: null, playback_rate: 1};
+    }
     var fraction = (magnitude - CONVERGENCE_DEADBAND) /
         (CONVERGENCE_SEEK_THRESHOLD - CONVERGENCE_DEADBAND);
     var cap = behind > 0 ? CONVERGENCE_MAX_SPEEDUP : CONVERGENCE_MAX_SLOWDOWN;
     var adjust = CONVERGENCE_MIN_NUDGE + (cap - CONVERGENCE_MIN_NUDGE) * fraction;
     return {seek_to: null, playback_rate: behind > 0 ? 1 + adjust : 1 - adjust};
+}
+
+// Seconds of media buffered ahead of the playhead, or null when unknowable.
+function player_buffered_ahead(video) {
+    try {
+        var buffered = video.buffered;
+        var current = video.currentTime || 0;
+        for (var i = 0; i < buffered.length; i++) {
+            if (buffered.start(i) <= current + 0.1 && current <= buffered.end(i)) {
+                return Math.max(0, buffered.end(i) - current);
+            }
+        }
+    } catch (e) {}
+    return null;
 }
 
 // A player participates only while genuinely playing: startup, recovery and
@@ -2260,6 +2289,15 @@ function run_convergence() {
             var behind;
             if (target_pdt !== null && entry.playing_pdt !== null && entry.edge_pdt !== null) {
                 behind = (target_pdt - entry.playing_pdt) / 1000;
+                // Physical clamp: however the cross-stream math works out
+                // (straggler exclusion, edge-offset asymmetries between
+                // prefetch and non-prefetch channels), a stream can never be
+                // asked to play closer than the holdback to its own edge --
+                // that zone is inside the delivery frontier and only starves.
+                var own_latency = measure_player_latency(entry.player);
+                if (own_latency !== null) {
+                    behind = Math.min(behind, own_latency - CONVERGENCE_HOLDBACK);
+                }
             } else {
                 // No usable PDT -> this stream can't wall-clock align; hold it
                 // near its own live edge instead.
@@ -2273,7 +2311,8 @@ function run_convergence() {
             if (!bounds) {
                 continue;
             }
-            var correction = convergence_correction(behind, video.currentTime || 0, bounds.start, bounds.end);
+            var correction = convergence_correction(behind, video.currentTime || 0,
+                bounds.start, bounds.end, player_buffered_ahead(video));
             if (correction.seek_to !== null) {
                 video.playbackRate = 1;
                 if (now - (entry.player.last_convergence_seek_at || 0) >= CONVERGENCE_SEEK_COOLDOWN) {

@@ -12,8 +12,8 @@ the convergence tick (cosmetic; both run at 1s).
 Delete the experimental "Stream sync" feature (button, sliders, measuring states,
 toggle) and replace it with nothing the user has to think about: every stream,
 all the time, converges to the same short distance behind live and stays there.
-With one stream that means "hold ~4s behind the edge"; with five streams it means
-"all five show the same real-world instant, ~4s behind the slowest channel's
+With one stream that means "hold ~6s behind the edge"; with five streams it means
+"all five show the same real-world instant, ~6s behind the slowest channel's
 ingest". Same controller, no modes, no toggle.
 
 Working assumption (stated by the product owner): viewers have the bandwidth and
@@ -75,9 +75,12 @@ edge_pdt_i   = last fragment PDT + duration + details.age      (per player)
 target_pdt   = min_i(edge_pdt_i) − HOLDBACK
 ```
 
-- `HOLDBACK = 4s` — matches the existing `liveSyncDuration: 4` (≈2 segments of
-  cushion). One constant, one meaning: "how far behind the slowest channel's
-  ingest we sit".
+- `HOLDBACK = 6s` — matches `liveSyncDuration` (3 segments). One constant, one
+  meaning: "how far behind the slowest channel's ingest we sit". Originally 4s;
+  live testing showed the prefetch-promoted edge is essentially realtime while
+  the newest segment is still drip-fed, so the *downloadable* frontier sits
+  ~3.5s (worst ~5s) behind the measured edge — a 4s holdback sat inside that
+  zone and starvation-looped (speed up → stall → fall back ~2s → repeat).
 - The `min` picks the channel whose pipeline is furthest behind real time
   (e.g. an fMP4 "Enhanced Broadcasting" channel, which gets no prefetch
   promotion and so has an older edge). You cannot sync closer to live than
@@ -101,12 +104,21 @@ Per healthy player, `error = (playingDate − target_pdt) / 1000` seconds
 | |error| | action |
 |---|---|
 | < 0.3s (`DEADBAND`) | nothing; `playbackRate = 1` |
-| 0.3s … 4s | proportional rate nudge, **asymmetric**: up to **+15%** when behind (catching up toward live is near-imperceptible with browser pitch correction), at most **−5%** when ahead (slowing is what viewers notice on the audible stream) |
+| 0.3s … 4s | proportional rate nudge, **asymmetric**: up to **+15%** when behind (catching up toward live is near-imperceptible with browser pitch correction), at most **−5%** when ahead (slowing is what viewers notice on the audible stream). Speed-ups are additionally vetoed while the forward buffer is under `MIN_BUFFER` (3s) — with a thin buffer a rate increase can only drive the playhead into the delivery frontier and stall, regardless of where the wall is |
 | ≥ 4s (`SEEK_THRESHOLD`) | hard seek: `video.currentTime += error`, clamped to the seekable range, with a per-player cooldown **longer than the loop interval** (e.g. 3s — the old 1500ms cooldown was a no-op against the 2s loop) |
 
 The deadband can be this tight — versus the old 1.0s default tolerance — because
 the PDT signal has no per-segment sawtooth. It comfortably covers residual
 cross-channel ingest-timestamp skew.
+
+Two guards bound what the correction may demand, both learned from live
+testing: speed-ups are vetoed while the forward buffer is under 3s (a rate
+increase with a thin buffer just starves playback into the delivery frontier),
+and the error is clamped so no stream is ever asked to reduce its *own*
+latency below the holdback (`behind = min(behind, own_latency − HOLDBACK)`) —
+whatever the cross-stream math says after straggler exclusion or
+prefetch/non-prefetch edge-offset asymmetries, that zone is physically
+undeliverable.
 
 Keep the correction function **pure** (`(playing_pdt, target_pdt, seekable
 bounds) → {seek_to, playback_rate}`), same as today's
@@ -122,7 +134,7 @@ two.
 
 ### Startup alignment
 
-Keep `liveSyncDuration: 4` equal to `HOLDBACK`. A fresh attach then lands within
+Keep `liveSyncDuration` equal to `HOLDBACK`. A fresh attach then lands within
 cross-channel ingest skew of the shared target, and the rate controller trims
 the remainder invisibly — no visible "attach, then jump" double-seek, and no
 need to thread a `startPosition` through attach.
@@ -266,7 +278,7 @@ hidden-tab note; CHANGES.txt entry.
 
 ## Verification checklist (per phase, in the browser)
 
-1. Two channels covering the same live event: hover latency labels read ~4–6s;
+1. Two channels covering the same live event: hover latency labels read ~6–8s;
    `playingDate` delta between tiles < 0.5s within a minute of load.
 2. Add a third channel mid-session: it joins within one seek + a few ticks,
    with no visible jump on the existing tiles.
