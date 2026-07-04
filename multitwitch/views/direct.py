@@ -1,6 +1,7 @@
 import re
 import threading
 import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin, urlsplit
 from urllib.request import Request, urlopen
@@ -22,6 +23,8 @@ STREAM_CACHE_FORCE_REFRESH_AGE = 5
 STREAM_CACHE_MAX_ENTRIES = 256
 STREAM_CACHE = {}
 STREAM_CACHE_LOCK = threading.Lock()
+STREAM_RESOLVE_EXECUTOR = ThreadPoolExecutor(max_workers=8)
+LIVE_STATUS_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
 
 def stream_url(request):
@@ -51,13 +54,10 @@ def stream_url(request):
             return _json_response(cached['data'])
 
     try:
-        data = _resolve_stream_url(channel, quality)
+        data = _resolve_stream_url_with_live_check(channel, quality)
+    except StreamOffline:
+        return _json_response({'error': 'Stream offline.'}, status=404)
     except Exception as exc:
-        try:
-            if not channel_is_live(channel):
-                return _json_response({'error': 'Stream offline.'}, status=404)
-        except Exception:
-            pass
         return _json_response({'error': str(exc)}, status=502)
 
     with STREAM_CACHE_LOCK:
@@ -73,6 +73,52 @@ def stream_url(request):
             'resolved_at': now,
         }
     return _json_response(data)
+
+
+class StreamOffline(Exception):
+    pass
+
+
+def _resolve_stream_url_with_live_check(channel, quality):
+    resolve_future = STREAM_RESOLVE_EXECUTOR.submit(_resolve_stream_url, channel, quality)
+    live_future = LIVE_STATUS_EXECUTOR.submit(channel_is_live, channel)
+    pending = {resolve_future, live_future}
+
+    while pending:
+        done, pending = wait(pending, return_when=FIRST_COMPLETED)
+        if live_future in done:
+            try:
+                if not live_future.result():
+                    resolve_future.cancel()
+                    raise StreamOffline()
+            except StreamOffline:
+                raise
+            except Exception:
+                pass
+        if resolve_future in done:
+            try:
+                data = resolve_future.result()
+                live_future.cancel()
+                return data
+            except Exception as exc:
+                if live_future.done():
+                    try:
+                        if not live_future.result():
+                            raise StreamOffline()
+                    except StreamOffline:
+                        raise
+                    except Exception:
+                        pass
+                    raise exc
+                try:
+                    if not live_future.result():
+                        raise StreamOffline()
+                except StreamOffline:
+                    raise
+                except Exception:
+                    pass
+                raise exc
+    return resolve_future.result()
 
 
 def _resolve_stream_url(channel, quality):

@@ -227,6 +227,20 @@ iframe {
     display: none;
 }
 
+.stream_straggler {
+    background: rgba(4, 8, 13, 0.88);
+    border: 1px solid rgba(251, 191, 36, 0.72);
+    color: #fde68a;
+    font-size: 11px;
+    line-height: 1;
+    padding: 4px 7px;
+    position: absolute;
+    right: 8px;
+    top: 72px;
+    white-space: nowrap;
+    z-index: 4;
+}
+
 /* Per-stream audio control (Shift-click). Pinned bottom-center, above the drag
    hitbox so it's adjustable. Like the other tile controls it's only revealed on
    hover (or tap on touch / focus for keyboard), even once the stream has audio. */

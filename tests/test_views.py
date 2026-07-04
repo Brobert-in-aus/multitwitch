@@ -2,6 +2,7 @@ import json
 import os
 import re
 import tempfile
+import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
@@ -116,6 +117,40 @@ class DirectStreamTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response_json(response)['error'], 'resolver failed')
+
+    def test_confirmed_offline_does_not_wait_for_slow_stream_resolution(self):
+        def slow_resolve(_channel, _quality):
+            time.sleep(1.0)
+            return {'url': 'https://video.example/late.m3u8'}
+
+        with mock.patch.object(direct, '_resolve_stream_url', side_effect=slow_resolve):
+            with mock.patch.object(direct, 'channel_is_live', return_value=False):
+                started = time.time()
+                response = direct.stream_url(self.request('offlinechannel'))
+
+        self.assertLess(time.time() - started, 0.8)
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response_json(response)['error'], 'Stream offline.')
+
+    def test_live_status_check_does_not_delay_successful_resolution(self):
+        def slow_live(_channel):
+            time.sleep(1.0)
+            return True
+
+        data = {
+            'channel': 'livechannel',
+            'quality': 'best',
+            'qualities': [],
+            'url': 'https://video.example/live.m3u8',
+        }
+        with mock.patch.object(direct, '_resolve_stream_url', return_value=data):
+            with mock.patch.object(direct, 'channel_is_live', side_effect=slow_live):
+                started = time.time()
+                response = direct.stream_url(self.request('livechannel'))
+
+        self.assertLess(time.time() - started, 0.8)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response_json(response)['url'], data['url'])
 
 
 class HlsProxyTests(unittest.TestCase):

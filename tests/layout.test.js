@@ -292,6 +292,16 @@ test("long-segment playlists derive a deeper convergence holdback", () => {
 });
 
 
+test("straggler thresholds scale with segment duration and have hysteresis", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.details_straggler_enter_seconds({fragments: [{duration: 2}]}), 10);
+    assert.equal(context.details_straggler_exit_seconds({fragments: [{duration: 2}]}), 8);
+    assert.ok(Math.abs(context.details_straggler_enter_seconds({fragments: [{duration: 4.17}]}) - 12.51) < 0.001);
+    assert.ok(Math.abs(context.details_straggler_exit_seconds({fragments: [{duration: 4.17}]}) - 10.51) < 0.001);
+});
+
+
 test("displayed latency prefers the capped PDT read over hls.latency", () => {
     const {context} = loadApplication();
     const base = Date.now();
@@ -437,6 +447,48 @@ test("long-segment streams anchor the shared wall at their safe holdback", () =>
 
     assert.equal(context.stream_players.normal.video.playbackRate, 1);
     assert.equal(context.stream_players.long.video.playbackRate, 1);
+});
+
+
+test("straggler state requires consecutive enter and exit ticks", () => {
+    const {context} = loadApplication();
+    const fresh = {
+        name: "fresh",
+        player: {},
+        edge_pdt: 20000,
+        playing_pdt: 10000,
+        holdback_seconds: 6,
+        straggler_enter_seconds: 10,
+        straggler_exit_seconds: 8,
+        is_straggler: false
+    };
+    const stale = {
+        name: "stale",
+        player: {},
+        edge_pdt: 9000,
+        playing_pdt: 8000,
+        holdback_seconds: 6,
+        straggler_enter_seconds: 10,
+        straggler_exit_seconds: 8,
+        is_straggler: false
+    };
+
+    context.update_stream_straggler_badge = () => {};
+
+    context.update_convergence_straggler_states([fresh, stale]);
+    assert.equal(stale.player.is_straggler, undefined);
+    context.update_convergence_straggler_states([fresh, stale]);
+    assert.equal(stale.player.is_straggler, undefined);
+    context.update_convergence_straggler_states([fresh, stale]);
+    assert.equal(stale.player.is_straggler, true);
+    assert.equal(context.compute_convergence_target_for_players([fresh, stale]), 14000);
+
+    stale.edge_pdt = 12500; // 7.5s behind, below the 8s exit threshold.
+    context.update_convergence_straggler_states([fresh, stale]);
+    assert.equal(stale.player.is_straggler, true);
+    context.update_convergence_straggler_states([fresh, stale]);
+    assert.equal(stale.player.is_straggler, false);
+    assert.equal(context.compute_convergence_target_for_players([fresh, stale]), 6500);
 });
 
 
@@ -680,6 +732,317 @@ test("startup bias raises the hold-back so new streams are born on the wall", ()
     delete context.stream_players.anchor;
     context.bias_startup_toward_wall("fresh", hls, details(-1000));
     assert.equal(hls.config.liveSyncDuration, 8);
+});
+
+
+test("startup sync waits for pending initial streams before playback", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 10000;
+    let plays = 0;
+    context.play_stream_with_target_audio = (_name, video) => {
+        plays += 1;
+        video.paused = false;
+    };
+    context.streams = ["ready", "pending"];
+    context.stream_load_pending.pending = true;
+    const hls = {config: {liveSyncDuration: 8}};
+    const video = {
+        paused: true,
+        currentTime: 100,
+        buffered: {length: 1, start: () => 100, end: () => 103}
+    };
+    context.stream_players.ready = {
+        name: "ready",
+        engine: "hls",
+        startup_pending: true,
+        startup_sync_released: false,
+        manual_paused: false,
+        hls,
+        video
+    };
+
+    context.coordinate_startup_toward_wall("ready", hls, {
+        live: true,
+        age: 0,
+        fragments: [{programDateTime: base - 2000, duration: 2}]
+    });
+
+    assert.equal(plays, 0);
+    assert.equal(context.stream_players.ready.startup_sync_released, false);
+
+    context.stream_load_pending.pending = false;
+    context.maybe_release_startup_sync();
+
+    assert.equal(plays, 1);
+    assert.equal(context.stream_players.ready.startup_sync_released, true);
+});
+
+
+test("startup sync aligns initial players to a shared startup wall", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 10000;
+    const played = [];
+    context.play_stream_with_target_audio = (name, video) => {
+        played.push(name);
+        video.paused = false;
+    };
+    context.streams = ["fast", "slow"];
+    context.stream_load_pending.slow = true;
+
+    function addPlayer(name) {
+        const hls = {config: {liveSyncDuration: 8}};
+        const video = {
+            paused: true,
+            currentTime: 100,
+            buffered: {length: 1, start: () => 100, end: () => 103}
+        };
+        context.stream_players[name] = {
+            name,
+            engine: "hls",
+            startup_pending: true,
+            startup_sync_released: false,
+            manual_paused: false,
+            hls,
+            video
+        };
+        return hls;
+    }
+    function details(edgeOffsetMs) {
+        return {
+            live: true,
+            age: 0,
+            fragments: [{programDateTime: base + edgeOffsetMs - 2000, duration: 2}]
+        };
+    }
+
+    const fast = addPlayer("fast");
+    const slow = addPlayer("slow");
+
+    context.coordinate_startup_toward_wall("fast", fast, details(0));
+    assert.deepEqual(played, []);
+
+    context.stream_load_pending.slow = false;
+    context.coordinate_startup_toward_wall("slow", slow, details(-4000));
+
+    assert.deepEqual(played.sort(), ["fast", "slow"]);
+    assert.ok(Math.abs(fast.config.liveSyncDuration - 10) < 0.05);
+    assert.ok(Math.abs(slow.config.liveSyncDuration - 6) < 0.05);
+});
+
+
+test("startup sync waits for buffer before starting on the stable wall", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 1000;
+    let plays = 0;
+    context.play_stream_with_target_audio = (_name, video) => {
+        plays += 1;
+        video.paused = false;
+    };
+    context.streams = ["example"];
+    const hls = {config: {liveSyncDuration: 8}};
+    const video = {
+        paused: true,
+        currentTime: 100,
+        buffered: {length: 1, start: () => 100, end: () => 101}
+    };
+    context.stream_players.example = {
+        name: "example",
+        engine: "hls",
+        startup_pending: true,
+        startup_sync_released: false,
+        manual_paused: false,
+        hls,
+        video
+    };
+    const details = {
+        live: true,
+        age: 0,
+        fragments: [{programDateTime: base - 2000, duration: 2}]
+    };
+
+    context.coordinate_startup_toward_wall("example", hls, details);
+    assert.equal(plays, 0);
+    assert.equal(context.stream_players.example.startup_sync_released, false);
+
+    video.buffered = {length: 1, start: () => 100, end: () => 102.5};
+    context.maybe_release_startup_sync();
+
+    assert.equal(plays, 1);
+    assert.equal(hls.config.liveSyncDuration, 6);
+});
+
+
+test("startup sync timeout falls back to the smooth-start wall", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 1000;
+    let plays = 0;
+    context.play_stream_with_target_audio = (_name, video) => {
+        plays += 1;
+        video.paused = false;
+    };
+    const hls = {config: {liveSyncDuration: 8}};
+    const video = {
+        paused: true,
+        currentTime: 100,
+        buffered: {length: 1, start: () => 100, end: () => 101}
+    };
+    context.stream_players.example = {
+        name: "example",
+        engine: "hls",
+        startup_pending: true,
+        startup_sync_released: false,
+        manual_paused: false,
+        hls,
+        video,
+        startup_sync_ready: true,
+        startup_sync_details: {
+            live: true,
+            age: 0,
+            fragments: [{programDateTime: base - 2000, duration: 2}]
+        }
+    };
+
+    context.release_startup_sync_players(null, true);
+
+    assert.equal(plays, 1);
+    assert.equal(hls.config.liveSyncDuration, 8);
+});
+
+
+test("startup fallback recomputes the shared wall from smooth-start holdbacks", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 10000;
+    const played = [];
+    context.play_stream_with_target_audio = (name, video) => {
+        played.push(name);
+        video.paused = false;
+    };
+
+    function addPlayer(name, edgeOffsetMs) {
+        const hls = {config: {liveSyncDuration: 8}};
+        const video = {
+            paused: true,
+            currentTime: 100,
+            buffered: {length: 1, start: () => 100, end: () => 101}
+        };
+        context.stream_players[name] = {
+            name,
+            engine: "hls",
+            startup_pending: true,
+            startup_sync_released: false,
+            manual_paused: false,
+            hls,
+            video,
+            startup_sync_ready: true,
+            startup_sync_details: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: base + edgeOffsetMs - 2000, duration: 2}]
+            }
+        };
+        return hls;
+    }
+
+    const slow = addPlayer("slow", 0);
+    const fast = addPlayer("fast", 4000);
+
+    context.release_startup_sync_players(null, true);
+
+    assert.deepEqual(played.sort(), ["fast", "slow"]);
+    assert.equal(slow.config.liveSyncDuration, 8);
+    assert.equal(fast.config.liveSyncDuration, 12);
+});
+
+
+test("startup sync ignores straggler edges when deriving the initial wall", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 30000;
+    const played = [];
+    context.play_stream_with_target_audio = (name, video) => {
+        played.push(name);
+        video.paused = false;
+    };
+
+    function addPlayer(name, edgeOffsetMs) {
+        const hls = {config: {liveSyncDuration: 8}};
+        const video = {
+            paused: true,
+            currentTime: 100,
+            buffered: {length: 1, start: () => 100, end: () => 103}
+        };
+        context.stream_players[name] = {
+            name,
+            engine: "hls",
+            startup_pending: true,
+            startup_sync_released: false,
+            manual_paused: false,
+            hls,
+            video,
+            startup_sync_ready: true,
+            startup_sync_details: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: base + edgeOffsetMs - 2000, duration: 2}]
+            }
+        };
+        return hls;
+    }
+
+    const straggler = addPlayer("straggler", 0);
+    const fresh = addPlayer("fresh", 20000);
+
+    context.release_startup_sync_players(null, false);
+
+    assert.deepEqual(played.sort(), ["fresh", "straggler"]);
+    assert.equal(fresh.config.liveSyncDuration, 6);
+    // The stale stream is released, but it self-starts at its own floor instead
+    // of dragging the shared startup wall behind the fresh stream.
+    assert.equal(straggler.config.liveSyncDuration, 6);
+});
+
+
+test("startup straggler filtering is segment-aware", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 30000;
+    const played = [];
+    context.play_stream_with_target_audio = (name, video) => {
+        played.push(name);
+        video.paused = false;
+    };
+
+    function addPlayer(name, edgeOffsetMs, duration) {
+        const hls = {config: {liveSyncDuration: 8}};
+        const video = {
+            paused: true,
+            currentTime: 100,
+            buffered: {length: 1, start: () => 100, end: () => 105}
+        };
+        context.stream_players[name] = {
+            name,
+            engine: "hls",
+            startup_pending: true,
+            startup_sync_released: false,
+            manual_paused: false,
+            hls,
+            video,
+            startup_sync_ready: true,
+            startup_sync_details: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: base + edgeOffsetMs - duration * 1000, duration}]
+            }
+        };
+        return hls;
+    }
+
+    const long = addPlayer("long", 0, 4.17);
+    const fresh = addPlayer("fresh", 11000, 2);
+
+    context.release_startup_sync_players(null, false);
+
+    assert.deepEqual(played.sort(), ["fresh", "long"]);
+    assert.equal(long.config.liveSyncDuration, 10);
+    assert.equal(fresh.config.liveSyncDuration, 16);
 });
 
 

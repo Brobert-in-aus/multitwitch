@@ -86,6 +86,8 @@ var CONVERGENCE_MIN_BUFFER_SEGMENTS = 1.5;
 var CONVERGENCE_STARTUP_LATENCY = 8;
 var CONVERGENCE_STARTUP_SEGMENTS = 4;
 var CONVERGENCE_MAX_STARTUP_LATENCY = 12;
+var STARTUP_SYNC_COORDINATION_WINDOW = 2000;
+var STARTUP_SYNC_MIN_BUFFER = 1;
 // The PDT signal has no per-segment sawtooth, so the dead-band only needs to
 // cover playlist fetch jitter and cross-channel ingest-timestamp skew.
 var CONVERGENCE_DEADBAND = 0.3;
@@ -98,12 +100,19 @@ var CONVERGENCE_MIN_NUDGE = 0.02;
 // An edge trailing the freshest by more than this is a stalled playlist, not
 // the legitimate slowest pipeline -- it must not drag the shared wall back.
 var CONVERGENCE_STRAGGLER_LIMIT = 10;
+var CONVERGENCE_STRAGGLER_SEGMENTS = 3;
+var CONVERGENCE_STRAGGLER_EXIT_MARGIN = 2;
+var CONVERGENCE_STRAGGLER_ENTER_TICKS = 3;
+var CONVERGENCE_STRAGGLER_EXIT_TICKS = 2;
 // A channel whose PDT is minutes away from the client clock is presumed to
 // have a broken clock and self-holds via the latency fallback instead.
 var CONVERGENCE_PDT_SANITY_LIMIT = 300;
 var CONVERGENCE_SEEK_COOLDOWN = 3000;  // ms; must exceed CONVERGENCE_INTERVAL
 var convergence_timer = null;
 var convergence_disabled = false;
+var stream_load_pending = {};
+var startup_sync_timer = null;
+var sync_debug_enabled = false;
 var twitch_user = null;
 var followed_channels = [];
 var followed_channels_loaded = false;
@@ -1505,6 +1514,7 @@ function load_direct_stream(tile, name, force_refresh, quality) {
     // Reloads (recovery, quality changes) keep the last requested quality so a
     // recovery doesn't silently revert an adapted stream back to "best".
     var requested_quality = quality || stream_quality_choice[name] || "best";
+    stream_load_pending[name] = true;
     set_player_status(tile, "Loading stream...");
     $.ajax({
         url: "/api/direct-stream/" + encodeURIComponent(name),
@@ -1512,6 +1522,8 @@ function load_direct_stream(tile, name, force_refresh, quality) {
         timeout: 20000,
         success: function(data) {
             attach_hls_stream(tile, name, video, data.url);
+            stream_load_pending[name] = false;
+            maybe_release_startup_sync();
             if (stream_players[name]) {
                 // What the server actually served (may differ from requested),
                 // plus the menu of available renditions, for the adapter.
@@ -1520,6 +1532,8 @@ function load_direct_stream(tile, name, force_refresh, quality) {
             }
         },
         error: function(xhr, text_status, error_thrown) {
+            stream_load_pending[name] = false;
+            maybe_release_startup_sync();
             log_stream_api_error(name, xhr, text_status, error_thrown);
             var message = (xhr.responseJSON && xhr.responseJSON.error) || "Could not load stream.";
             if (stream_players[name]) {
@@ -1599,6 +1613,7 @@ function attach_hls_stream(tile, name, video, url) {
     set_video_muted(video, initial_audio.muted);
     video.volume = initial_audio.muted ? 0.0 : initial_audio.volume;
     stream_players[name] = {
+        name: name,
         video: video,
         hls: null,
         manual_paused: false,
@@ -1617,6 +1632,12 @@ function attach_hls_stream(tile, name, video, url) {
         startup_pending: true,
         startup_started_at: Date.now(),
         startup_progress_started_at: 0,
+        startup_sync_ready: false,
+        startup_sync_released: false,
+        startup_sync_details: null,
+        is_straggler: false,
+        straggler_enter_ticks: 0,
+        straggler_exit_ticks: 0,
         last_audible_play_blocked_at: 0,
         last_convergence_seek_at: 0
     };
@@ -1735,9 +1756,10 @@ function attach_hls_stream(tile, name, video, url) {
             retry_hls_startup_play(name, hls, video);
         });
         hls.on(Hls.Events.LEVEL_LOADED, function(event, data) {
-            bias_startup_toward_wall(name, hls, data && data.details);
+            coordinate_startup_toward_wall(name, hls, data && data.details);
         });
         hls.on(Hls.Events.FRAG_BUFFERED, function() {
+            maybe_release_startup_sync();
             retry_hls_startup_play(name, hls, video);
         });
         hls.on(Hls.Events.ERROR, function(event, data) {
@@ -1849,7 +1871,8 @@ function complete_stream_startup(name, player, tile) {
 function retry_hls_startup_play(name, hls, video) {
     var player = stream_players[name];
     if (!player || !player.startup_pending || player.hls !== hls ||
-        player.video !== video || player.manual_paused || !video.paused) {
+        player.video !== video || player.manual_paused || !video.paused ||
+        player.startup_sync_released === false) {
         return;
     }
     player.resume_blocked = false;
@@ -2110,9 +2133,33 @@ function convergence_kill_switch_active() {
 
 function initialize_convergence() {
     convergence_disabled = convergence_kill_switch_active();
+    sync_debug_enabled = sync_debug_active();
     if (!convergence_disabled && !convergence_timer) {
         convergence_timer = setInterval(run_convergence, CONVERGENCE_INTERVAL);
     }
+}
+
+function sync_debug_active() {
+    try {
+        if (/[?&]syncdebug=1(&|$)/.test(window.location.search)) {
+            return true;
+        }
+    } catch (e) {}
+    try {
+        if (window.localStorage.getItem("multitwitch.syncdebug") === "1") {
+            return true;
+        }
+    } catch (e) {}
+    return false;
+}
+
+function sync_debug_log(label, fields) {
+    if (!sync_debug_enabled || !window.console || !console.log) {
+        return;
+    }
+    try {
+        console.log("[StreamMulti sync] " + label, fields);
+    } catch (e) {}
 }
 
 // Wall-clock time (ms) of the playhead, from the playlist's
@@ -2232,6 +2279,52 @@ function details_startup_latency_seconds(details) {
         Math.max(CONVERGENCE_STARTUP_LATENCY, segment_duration * CONVERGENCE_STARTUP_SEGMENTS));
 }
 
+function details_straggler_enter_seconds(details) {
+    var segment_duration = details_segment_duration(details);
+    if (segment_duration === null) {
+        return CONVERGENCE_STRAGGLER_LIMIT;
+    }
+    return Math.max(CONVERGENCE_STRAGGLER_LIMIT, segment_duration * CONVERGENCE_STRAGGLER_SEGMENTS);
+}
+
+function details_straggler_exit_seconds(details) {
+    return Math.max(0, details_straggler_enter_seconds(details) - CONVERGENCE_STRAGGLER_EXIT_MARGIN);
+}
+
+function player_straggler_enter_seconds(player) {
+    try {
+        return details_straggler_enter_seconds(player && player.hls && player.hls.latestLevelDetails);
+    } catch (e) {
+        return CONVERGENCE_STRAGGLER_LIMIT;
+    }
+}
+
+function player_straggler_exit_seconds(player) {
+    try {
+        return details_straggler_exit_seconds(player && player.hls && player.hls.latestLevelDetails);
+    } catch (e) {
+        return Math.max(0, CONVERGENCE_STRAGGLER_LIMIT - CONVERGENCE_STRAGGLER_EXIT_MARGIN);
+    }
+}
+
+function update_stream_straggler_badge(name, active) {
+    try {
+        var tile = stream_tile_by_name(name);
+        if (!tile || !tile.length) {
+            return;
+        }
+        var badge = tile.find(".stream_straggler");
+        if (active) {
+            if (!badge.length) {
+                badge = $("<div>", {"class": "stream_straggler", "aria-hidden": "true"}).appendTo(tile);
+            }
+            badge.text("Catching up").attr("title", "This stream is behind the group and catching up independently.");
+        } else {
+            badge.remove();
+        }
+    } catch (e) {}
+}
+
 // The shared wall: the newest wall-clock instant every healthy channel has
 // delivered, minus the holdback. `edges` is an array of edge PDTs in ms. An
 // edge trailing the freshest by more than the straggler limit is a stalled
@@ -2270,9 +2363,6 @@ function compute_convergence_target(edges, holdback_seconds, straggler_limit_sec
 }
 
 function compute_convergence_target_for_players(players, straggler_limit_seconds) {
-    if (straggler_limit_seconds === undefined) {
-        straggler_limit_seconds = CONVERGENCE_STRAGGLER_LIMIT;
-    }
     var freshest = null;
     var i, entry;
     for (i = 0; i < players.length; i++) {
@@ -2288,8 +2378,11 @@ function compute_convergence_target_for_players(players, straggler_limit_seconds
     var target = null;
     for (i = 0; i < players.length; i++) {
         entry = players[i];
+        var limit = straggler_limit_seconds === undefined
+            ? (entry.straggler_enter_seconds || CONVERGENCE_STRAGGLER_LIMIT)
+            : straggler_limit_seconds;
         if (entry.edge_pdt === null || typeof entry.edge_pdt !== "number" || !isFinite(entry.edge_pdt) ||
-            entry.playing_pdt === null || freshest - entry.edge_pdt > straggler_limit_seconds * 1000) {
+            entry.playing_pdt === null || entry.is_straggler || freshest - entry.edge_pdt > limit * 1000) {
             continue;
         }
         var candidate = entry.edge_pdt - entry.holdback_seconds * 1000;
@@ -2373,10 +2466,73 @@ function collect_convergence_players() {
             edge_pdt: edge_pdt,
             playing_pdt: playing_pdt,
             holdback_seconds: player_holdback_seconds(player),
-            min_buffer_seconds: player_min_buffer_seconds(player)
+            min_buffer_seconds: player_min_buffer_seconds(player),
+            straggler_enter_seconds: player_straggler_enter_seconds(player),
+            straggler_exit_seconds: player_straggler_exit_seconds(player),
+            is_straggler: !!player.is_straggler
         });
     }
     return collected;
+}
+
+function update_convergence_straggler_states(players) {
+    var freshest = null;
+    var i, entry;
+    for (i = 0; i < players.length; i++) {
+        entry = players[i];
+        if (entry.edge_pdt !== null && typeof entry.edge_pdt === "number" && isFinite(entry.edge_pdt) &&
+            (freshest === null || entry.edge_pdt > freshest)) {
+            freshest = entry.edge_pdt;
+        }
+    }
+    if (freshest === null) {
+        return;
+    }
+    for (i = 0; i < players.length; i++) {
+        entry = players[i];
+        var player = entry.player;
+        if (!player) {
+            continue;
+        }
+        if (entry.edge_pdt === null || typeof entry.edge_pdt !== "number" || !isFinite(entry.edge_pdt)) {
+            player.straggler_enter_ticks = 0;
+            player.straggler_exit_ticks = 0;
+            continue;
+        }
+        var gap = (freshest - entry.edge_pdt) / 1000;
+        if (player.is_straggler) {
+            if (gap < entry.straggler_exit_seconds) {
+                player.straggler_exit_ticks = (player.straggler_exit_ticks || 0) + 1;
+            } else {
+                player.straggler_exit_ticks = 0;
+            }
+            if (player.straggler_exit_ticks >= CONVERGENCE_STRAGGLER_EXIT_TICKS) {
+                player.is_straggler = false;
+                player.straggler_enter_ticks = 0;
+                player.straggler_exit_ticks = 0;
+            }
+        } else {
+            if (gap > entry.straggler_enter_seconds) {
+                player.straggler_enter_ticks = (player.straggler_enter_ticks || 0) + 1;
+            } else {
+                player.straggler_enter_ticks = 0;
+            }
+            if (player.straggler_enter_ticks >= CONVERGENCE_STRAGGLER_ENTER_TICKS) {
+                player.is_straggler = true;
+                player.straggler_enter_ticks = 0;
+                player.straggler_exit_ticks = 0;
+            }
+        }
+        entry.is_straggler = !!player.is_straggler;
+        update_stream_straggler_badge(entry.name, entry.is_straggler);
+        sync_debug_log("straggler", {
+            name: entry.name,
+            gap: Number(gap.toFixed(3)),
+            enter: entry.straggler_enter_seconds,
+            exit: entry.straggler_exit_seconds,
+            active: entry.is_straggler
+        });
+    }
 }
 
 // The shared wall as currently computable from the healthy players -- the same
@@ -2385,6 +2541,193 @@ function collect_convergence_players() {
 function convergence_target_pdt() {
     var players = collect_convergence_players();
     return compute_convergence_target_for_players(players);
+}
+
+function startup_sync_candidate_names() {
+    var names = {};
+    for (var i = 0; i < streams.length; i++) {
+        names[streams[i]] = true;
+    }
+    for (var name in stream_players) {
+        if (Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            names[name] = true;
+        }
+    }
+    return names;
+}
+
+function startup_sync_waiting_for_loads() {
+    var names = startup_sync_candidate_names();
+    for (var name in names) {
+        if (Object.prototype.hasOwnProperty.call(names, name) && stream_load_pending[name]) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function startup_sync_ready_players() {
+    var ready = [];
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        if (player && player.engine === "hls" && player.startup_pending &&
+            player.startup_sync_ready && !player.startup_sync_released &&
+            player.startup_sync_details) {
+            ready.push({name: name, player: player, details: player.startup_sync_details});
+        }
+    }
+    return ready;
+}
+
+function startup_sync_has_unready_players() {
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        if (player && player.engine === "hls" && player.startup_pending &&
+            !player.startup_sync_released && !player.startup_sync_ready) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function startup_sync_target_pdt(entries, use_startup_fallback) {
+    var freshest = null;
+    var edge, i;
+    for (i = 0; i < entries.length; i++) {
+        edge = details_edge_pdt(entries[i].details);
+        if (edge === null || Math.abs(edge - Date.now()) > CONVERGENCE_PDT_SANITY_LIMIT * 1000) {
+            continue;
+        }
+        if (freshest === null || edge > freshest) {
+            freshest = edge;
+        }
+    }
+    if (freshest === null) {
+        return null;
+    }
+    var target = null;
+    for (i = 0; i < entries.length; i++) {
+        edge = details_edge_pdt(entries[i].details);
+        if (edge === null || Math.abs(edge - Date.now()) > CONVERGENCE_PDT_SANITY_LIMIT * 1000) {
+            continue;
+        }
+        if (freshest - edge > details_straggler_enter_seconds(entries[i].details) * 1000) {
+            continue;
+        }
+        var holdback = use_startup_fallback
+            ? details_startup_latency_seconds(entries[i].details)
+            : details_holdback_seconds(entries[i].details);
+        var candidate = edge - holdback * 1000;
+        if (target === null || candidate < target) {
+            target = candidate;
+        }
+    }
+    return target;
+}
+
+function release_startup_player(player) {
+    if (!player || player.startup_sync_released) {
+        return;
+    }
+    player.startup_sync_released = true;
+    if (player.hls && player.video) {
+        retry_hls_startup_play(player.name, player.hls, player.video);
+    }
+}
+
+function startup_entry_buffer_ready(entry) {
+    if (!entry || !entry.player || !entry.player.video) {
+        return false;
+    }
+    var buffered = player_buffered_ahead(entry.player.video);
+    if (buffered === null) {
+        return false;
+    }
+    return buffered >= Math.max(STARTUP_SYNC_MIN_BUFFER, details_segment_duration(entry.details) || 0);
+}
+
+function startup_entries_have_buffer(entries) {
+    if (!entries || !entries.length) {
+        return false;
+    }
+    for (var i = 0; i < entries.length; i++) {
+        if (!startup_entry_buffer_ready(entries[i])) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function release_startup_sync_players(entries, use_startup_fallback) {
+    entries = entries || startup_sync_ready_players();
+    var target = startup_sync_target_pdt(entries, use_startup_fallback);
+    for (var i = 0; i < entries.length; i++) {
+        var entry = entries[i];
+        var edge = details_edge_pdt(entry.details);
+        if (target !== null && edge !== null && entry.player.hls && entry.player.hls.config) {
+            var desired = (edge - target) / 1000;
+            var floor = use_startup_fallback
+                ? details_startup_latency_seconds(entry.details)
+                : details_holdback_seconds(entry.details);
+            if (isFinite(desired)) {
+                entry.player.hls.config.liveSyncDuration = Math.max(
+                    floor,
+                    Math.min(details_holdback_seconds(entry.details) + CONVERGENCE_STRAGGLER_LIMIT, desired)
+                );
+            }
+        }
+        release_startup_player(entry.player);
+    }
+    if (startup_sync_timer && !startup_sync_ready_players().length) {
+        clearTimeout(startup_sync_timer);
+        startup_sync_timer = null;
+    }
+}
+
+function maybe_release_startup_sync() {
+    var entries = startup_sync_ready_players();
+    if (!entries.length) {
+        return;
+    }
+    if (!startup_sync_waiting_for_loads() && !startup_sync_has_unready_players()) {
+        if (startup_entries_have_buffer(entries)) {
+            release_startup_sync_players(entries, false);
+        }
+    }
+}
+
+function schedule_startup_sync_release() {
+    maybe_release_startup_sync();
+    if (startup_sync_timer) {
+        return;
+    }
+    startup_sync_timer = setTimeout(function() {
+        startup_sync_timer = null;
+        release_startup_sync_players(null, true);
+    }, STARTUP_SYNC_COORDINATION_WINDOW);
+}
+
+function coordinate_startup_toward_wall(name, hls, details) {
+    var player = stream_players[name];
+    if (!player || player.hls !== hls || !player.startup_pending || !hls.config) {
+        return;
+    }
+    player.startup_sync_details = details || null;
+    player.startup_sync_ready = !!details;
+
+    var target_pdt = convergence_target_pdt();
+    bias_startup_toward_wall(name, hls, details);
+    if (target_pdt !== null) {
+        release_startup_player(player);
+        return;
+    }
+    schedule_startup_sync_release();
 }
 
 // Born converged: hls.js starts a fresh stream CONVERGENCE_HOLDBACK behind its
@@ -2428,6 +2771,7 @@ function run_convergence() {
     if (!players.length) {
         return;
     }
+    update_convergence_straggler_states(players);
     var target_pdt = compute_convergence_target_for_players(players);
     var now = Date.now();
     for (var i = 0; i < players.length; i++) {
@@ -2470,6 +2814,17 @@ function run_convergence() {
             } else {
                 video.playbackRate = correction.playback_rate;
             }
+            sync_debug_log("tick", {
+                name: entry.name,
+                behind: Number(behind.toFixed(3)),
+                target: target_pdt,
+                edgeGap: entry.edge_pdt === null ? null : Number(((Date.now() - entry.edge_pdt) / 1000).toFixed(3)),
+                holdback: entry.holdback_seconds,
+                buffer: player_buffered_ahead(video),
+                rate: video.playbackRate,
+                seek: correction.seek_to,
+                straggler: !!entry.player.is_straggler
+            });
         } catch (e) {
             try {
                 video.playbackRate = 1;
@@ -2946,6 +3301,7 @@ function update_volume_display() {
 function destroy_stream_player(name) {
     var player = stream_players[name];
     if (!player) {
+        delete stream_load_pending[name];
         return;
     }
     try {
@@ -2968,7 +3324,10 @@ function destroy_stream_player(name) {
             player.hls.destroy();
         }
     } catch (e) {}
+    delete stream_load_pending[name];
     delete stream_players[name];
+    update_stream_straggler_badge(name, false);
+    maybe_release_startup_sync();
 }
 
 function set_player_status(tile, message) {
