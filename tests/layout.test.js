@@ -232,6 +232,200 @@ test("sync tolerance widens the synced dead-band and is clamped", () => {
 });
 
 
+test("convergence target is the slowest healthy edge minus the holdback", () => {
+    const {context} = loadApplication();
+
+    // The slowest healthy channel defines the shared wall.
+    assert.equal(context.compute_convergence_target([1000000, 1004000, 1002000], 4, 10), 996000);
+    // A straggler (trailing the freshest edge by more than the limit) is a
+    // stalled playlist and cannot drag the wall back...
+    assert.equal(context.compute_convergence_target([1000000, 1020000], 4, 10), 1016000);
+    // ...but a mild laggard still counts as the legitimate slowest pipeline.
+    assert.equal(context.compute_convergence_target([1012000, 1020000], 4, 10), 1008000);
+    // A single stream degenerates to holding behind its own edge -- the
+    // property that lets convergence replace the sync feature without a mode.
+    assert.equal(context.compute_convergence_target([500000], 4, 10), 496000);
+    // No usable edges -> no target.
+    assert.equal(context.compute_convergence_target([], 4, 10), null);
+    assert.equal(context.compute_convergence_target([NaN], 4, 10), null);
+});
+
+
+test("convergence correction holds a dead-band, nudges asymmetrically, seeks big gaps", () => {
+    const {context} = loadApplication();
+
+    // Within the dead-band -> converged, leave it alone.
+    const settled = context.convergence_correction(0.2, 100, 80, 120);
+    assert.equal(settled.seek_to, null);
+    assert.equal(settled.playback_rate, 1);
+
+    // Behind the wall -> speed up, harder for wider gaps, capped at +15%.
+    const behind = context.convergence_correction(1.0, 100, 80, 120);
+    assert.equal(behind.seek_to, null);
+    assert.ok(behind.playback_rate > 1 && behind.playback_rate <= 1.15);
+    const further = context.convergence_correction(3.0, 100, 80, 120);
+    assert.ok(further.playback_rate > behind.playback_rate);
+    assert.ok(further.playback_rate <= 1.15);
+
+    // Ahead of the wall -> gentle slowdown only, capped at -5%.
+    const ahead = context.convergence_correction(-3.0, 100, 80, 120);
+    assert.equal(ahead.seek_to, null);
+    assert.ok(ahead.playback_rate < 1 && ahead.playback_rate >= 0.95);
+
+    // Past the seek threshold -> jump, clamped inside the seekable range.
+    const jump = context.convergence_correction(6, 100, 80, 120);
+    assert.equal(jump.seek_to, 106);
+    assert.equal(jump.playback_rate, 1);
+    assert.equal(context.convergence_correction(40, 100, 80, 120).seek_to, 119.75);
+    assert.equal(context.convergence_correction(-6, 100, 80, 120).seek_to, 94);
+});
+
+
+test("edge PDT de-quantizes the 2s playlist staircase with playlist age", () => {
+    const {context} = loadApplication();
+    const player = {
+        hls: {
+            latestLevelDetails: {
+                live: true,
+                age: 1.5,
+                fragments: [
+                    {programDateTime: 1700000000000, duration: 2},
+                    {programDateTime: 1700000002000, duration: 2}
+                ]
+            }
+        },
+        video: {}
+    };
+
+    // Last fragment PDT + its duration + time since the playlist was fetched.
+    assert.equal(context.player_edge_pdt(player), 1700000005500);
+    // VODs / playlists without PDT -> no edge estimate.
+    assert.equal(context.player_edge_pdt({hls: {latestLevelDetails: {live: false, fragments: []}}}), null);
+    assert.equal(context.player_edge_pdt({hls: {latestLevelDetails: {live: true, fragments: [{duration: 2}]}}}), null);
+    assert.equal(context.player_edge_pdt({hls: null}), null);
+});
+
+
+test("playing PDT reads hls.js playingDate and tolerates its absence", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.player_playing_pdt({hls: {playingDate: new Date(1700000001234)}}), 1700000001234);
+    assert.equal(context.player_playing_pdt({hls: {playingDate: null}}), null);
+    assert.equal(context.player_playing_pdt(null), null);
+});
+
+
+test("convergence steers every healthy stream toward the shared wall", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    function fakePlayer(edgeOffsetMs, playingOffsetMs) {
+        return {
+            engine: "hls",
+            manual_paused: false,
+            recovering: false,
+            startup_pending: false,
+            last_convergence_seek_at: 0,
+            hls: {
+                playingDate: new Date(base + playingOffsetMs),
+                latestLevelDetails: {
+                    live: true,
+                    age: 0,
+                    fragments: [{programDateTime: base + edgeOffsetMs - 2000, duration: 2}]
+                }
+            },
+            video: {
+                currentTime: 100,
+                playbackRate: 1,
+                paused: false,
+                seekable: {length: 1, start: () => 50, end: () => 120}
+            }
+        };
+    }
+    // Slowest edge (base-6000) defines the wall: target = base - 10000.
+    context.stream_players.slow = fakePlayer(-6000, -10100);  // 0.1s off -> dead-band
+    context.stream_players.fast = fakePlayer(-4000, -12000);  // 2s behind -> speeds up
+    context.stream_players.lost = fakePlayer(-5000, -20000);  // 10s behind -> seeks
+
+    context.run_convergence();
+
+    assert.equal(context.stream_players.slow.video.playbackRate, 1);
+    assert.ok(context.stream_players.fast.video.playbackRate > 1);
+    assert.equal(context.stream_players.lost.video.playbackRate, 1);
+    assert.equal(context.stream_players.lost.video.currentTime, 110);
+    assert.ok(context.stream_players.lost.last_convergence_seek_at > 0);
+});
+
+
+test("the nosync kill switch leaves playback untouched", () => {
+    const {context, localStorage} = loadApplication();
+    localStorage.setItem("multitwitch.nosync", "1");
+
+    context.initialize_convergence();
+    assert.equal(context.convergence_disabled, true);
+
+    const base = Date.now();
+    context.stream_players.example = {
+        engine: "hls",
+        manual_paused: false,
+        recovering: false,
+        startup_pending: false,
+        last_convergence_seek_at: 0,
+        hls: {
+            playingDate: new Date(base - 20000),
+            latestLevelDetails: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: base - 2000, duration: 2}]
+            }
+        },
+        video: {
+            currentTime: 100,
+            playbackRate: 1,
+            seekable: {length: 1, start: () => 50, end: () => 120}
+        }
+    };
+
+    context.run_convergence();
+
+    assert.equal(context.stream_players.example.video.playbackRate, 1);
+    assert.equal(context.stream_players.example.video.currentTime, 100);
+});
+
+
+test("a channel with a broken PDT clock self-holds instead of poisoning the wall", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    // Edge PDT hours away from the client clock -> demoted to the latency
+    // fallback (hold ~4s behind its own edge), not used for the shared target.
+    context.stream_players.broken = {
+        engine: "hls",
+        manual_paused: false,
+        recovering: false,
+        startup_pending: false,
+        last_convergence_seek_at: 0,
+        hls: {
+            latency: 10,
+            playingDate: new Date(base - 7200000),
+            latestLevelDetails: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: base - 7200000, duration: 2}]
+            }
+        },
+        video: {
+            currentTime: 100,
+            playbackRate: 1,
+            seekable: {length: 1, start: () => 50, end: () => 120}
+        }
+    };
+
+    context.run_convergence();
+
+    // latency 10 vs holdback 4 -> 6s behind -> seeks forward by 6s.
+    assert.equal(context.stream_players.broken.video.currentTime, 106);
+});
+
+
 test("engine selection prefers hls.js wherever it runs, native only as fallback", () => {
     const {context} = loadApplication();
     const supportedHls = {isSupported: () => true};

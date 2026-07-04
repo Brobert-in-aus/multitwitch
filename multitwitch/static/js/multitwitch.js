@@ -72,6 +72,35 @@ var latency_sync_extra_delay = load_saved_latency_sync_delay();
 var latency_sync_tolerance = load_saved_latency_sync_tolerance();
 var latency_sync_base_latency = null;
 var latency_sync_timer = null;
+// Convergence controller (Phase 1 of docs/obsolete-stream-sync.md): always-on
+// steering of every stream toward one shared wall-clock instant -- the slowest
+// healthy channel's live-edge program-date-time minus a fixed holdback. With a
+// single stream the same math degenerates to "hold ~4s behind my own edge", so
+// there is no mode and no toggle. Supersedes the experimental latency-sync
+// feature above, which keeps authority while the user has it enabled and is
+// deleted in Phase 2.
+var CONVERGENCE_INTERVAL = 1000;
+// Matches liveSyncDuration below: how far behind the slowest channel's ingest
+// edge the shared instant sits (~2 segments of cushion).
+var CONVERGENCE_HOLDBACK = 4;
+// The PDT signal has no per-segment sawtooth, so the dead-band only needs to
+// cover playlist fetch jitter and cross-channel ingest-timestamp skew.
+var CONVERGENCE_DEADBAND = 0.3;
+var CONVERGENCE_SEEK_THRESHOLD = 4;
+// Asymmetric authority: catching up toward live is near-imperceptible with
+// browser pitch correction; slowing the audible stream is what viewers notice.
+var CONVERGENCE_MAX_SPEEDUP = 0.15;
+var CONVERGENCE_MAX_SLOWDOWN = 0.05;
+var CONVERGENCE_MIN_NUDGE = 0.02;
+// An edge trailing the freshest by more than this is a stalled playlist, not
+// the legitimate slowest pipeline -- it must not drag the shared wall back.
+var CONVERGENCE_STRAGGLER_LIMIT = 10;
+// A channel whose PDT is minutes away from the client clock is presumed to
+// have a broken clock and self-holds via the latency fallback instead.
+var CONVERGENCE_PDT_SANITY_LIMIT = 300;
+var CONVERGENCE_SEEK_COOLDOWN = 3000;  // ms; must exceed CONVERGENCE_INTERVAL
+var convergence_timer = null;
+var convergence_disabled = false;
 var twitch_user = null;
 var followed_channels = [];
 var followed_channels_loaded = false;
@@ -881,6 +910,7 @@ function initialize_stream_players() {
         create_stream_player(tile);
     });
     sync_active_stream_audio();
+    initialize_convergence();
 }
 
 function create_stream_player(tile) {
@@ -1588,7 +1618,8 @@ function attach_hls_stream(tile, name, video, url) {
         last_audible_play_blocked_at: 0,
         sync_natural_latency: null,
         sync_smoothed_latency: null,
-        last_sync_seek_at: 0
+        last_sync_seek_at: 0,
+        last_convergence_seek_at: 0
     };
     $(video).off(".playbackRecovery")
         .on("pause.playbackRecovery", function() {
@@ -2315,6 +2346,225 @@ function update_latency_sync_ui(status) {
     $("#latency_sync_state")
         .toggleClass("state-active", latency_sync_enabled)
         .text(status || (enough_streams ? "Ready" : "Need 2 streams"));
+}
+
+// --- Convergence controller ------------------------------------------------
+// Always-on near-live alignment (Phase 1 of docs/obsolete-stream-sync.md).
+
+// Debug bypass while the controller soaks: ?nosync=1 in the URL, or
+// localStorage "multitwitch.nosync" = "1". Checked once at startup.
+function convergence_kill_switch_active() {
+    try {
+        if (/[?&]nosync=1(&|$)/.test(window.location.search)) {
+            return true;
+        }
+    } catch (e) {}
+    try {
+        if (window.localStorage.getItem("multitwitch.nosync") === "1") {
+            return true;
+        }
+    } catch (e) {}
+    return false;
+}
+
+function initialize_convergence() {
+    convergence_disabled = convergence_kill_switch_active();
+    if (!convergence_disabled && !convergence_timer) {
+        convergence_timer = setInterval(run_convergence, CONVERGENCE_INTERVAL);
+    }
+}
+
+// Wall-clock time (ms) of the playhead, from the playlist's
+// EXT-X-PROGRAM-DATE-TIME. hls.js interpolates within the fragment, so unlike
+// the latency measurement this advances continuously -- no per-segment
+// sawtooth, no smoothing needed.
+function player_playing_pdt(player) {
+    if (!player || !player.hls) {
+        return null;
+    }
+    var date = null;
+    try {
+        date = player.hls.playingDate;
+    } catch (e) {
+        return null;
+    }
+    if (!date || typeof date.getTime !== "function") {
+        return null;
+    }
+    var ms = date.getTime();
+    return isFinite(ms) ? ms : null;
+}
+
+// Wall-clock time (ms) the channel's ingest has delivered up to. The playlist
+// only advances in ~2s segment steps, so the last fragment's PDT is a
+// staircase; adding the playlist's age (time since it was fetched) restores a
+// continuous estimate -- the two terms form complementary sawtooths. Promoted
+// prefetch segments carry no PDT tag; hls.js extrapolates theirs from the last
+// tagged fragment plus durations.
+function player_edge_pdt(player) {
+    if (!player || !player.hls) {
+        return null;
+    }
+    var details = null;
+    try {
+        details = player.hls.latestLevelDetails;
+    } catch (e) {
+        return null;
+    }
+    if (!details || !details.live || !details.fragments || !details.fragments.length) {
+        return null;
+    }
+    var frag = details.fragments[details.fragments.length - 1];
+    if (!frag || typeof frag.programDateTime !== "number" || !isFinite(frag.programDateTime)) {
+        return null;
+    }
+    return frag.programDateTime + (frag.duration || 0) * 1000 + (details.age || 0) * 1000;
+}
+
+// The shared wall: the newest wall-clock instant every healthy channel has
+// delivered, minus the holdback. `edges` is an array of edge PDTs in ms. An
+// edge trailing the freshest by more than the straggler limit is a stalled
+// playlist and is excluded -- it keeps steering toward the wall on its own and
+// rejoins the derivation once its edge recovers.
+function compute_convergence_target(edges, holdback_seconds, straggler_limit_seconds) {
+    if (holdback_seconds === undefined) {
+        holdback_seconds = CONVERGENCE_HOLDBACK;
+    }
+    if (straggler_limit_seconds === undefined) {
+        straggler_limit_seconds = CONVERGENCE_STRAGGLER_LIMIT;
+    }
+    var freshest = null;
+    var i, edge;
+    for (i = 0; i < edges.length; i++) {
+        edge = edges[i];
+        if (typeof edge === "number" && isFinite(edge) && (freshest === null || edge > freshest)) {
+            freshest = edge;
+        }
+    }
+    if (freshest === null) {
+        return null;
+    }
+    var slowest = null;
+    for (i = 0; i < edges.length; i++) {
+        edge = edges[i];
+        if (typeof edge !== "number" || !isFinite(edge) ||
+            freshest - edge > straggler_limit_seconds * 1000) {
+            continue;
+        }
+        if (slowest === null || edge < slowest) {
+            slowest = edge;
+        }
+    }
+    return slowest - holdback_seconds * 1000;
+}
+
+// behind > 0 -> the playhead is showing an older instant than the target.
+// Within the dead-band: converged, leave it alone. Up to the seek threshold:
+// proportional rate nudge with asymmetric caps (speeding toward live is far
+// less noticeable than slowing). Past the threshold: a visible seek, clamped
+// inside the seekable range.
+function convergence_correction(behind, current_time, seek_start, seek_end) {
+    var magnitude = Math.abs(behind);
+    if (magnitude >= CONVERGENCE_SEEK_THRESHOLD) {
+        var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + behind));
+        return {seek_to: seek_to, playback_rate: 1};
+    }
+    if (magnitude < CONVERGENCE_DEADBAND) {
+        return {seek_to: null, playback_rate: 1};
+    }
+    var fraction = (magnitude - CONVERGENCE_DEADBAND) /
+        (CONVERGENCE_SEEK_THRESHOLD - CONVERGENCE_DEADBAND);
+    var cap = behind > 0 ? CONVERGENCE_MAX_SPEEDUP : CONVERGENCE_MAX_SLOWDOWN;
+    var adjust = CONVERGENCE_MIN_NUDGE + (cap - CONVERGENCE_MIN_NUDGE) * fraction;
+    return {seek_to: null, playback_rate: behind > 0 ? 1 + adjust : 1 - adjust};
+}
+
+// A player participates only while genuinely playing: startup, recovery and
+// manual pauses are excluded (their positions are in flux, and steering them
+// would fight the recovery machinery). Native-engine players (iOS Safari)
+// expose no latency/seek control and are left alone entirely.
+function collect_convergence_players() {
+    var collected = [];
+    for (var name in stream_players) {
+        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
+            continue;
+        }
+        var player = stream_players[name];
+        if (!player || !player.video || player.engine !== "hls" ||
+            player.manual_paused || player.recovering || player.startup_pending) {
+            continue;
+        }
+        var edge_pdt = player_edge_pdt(player);
+        var playing_pdt = player_playing_pdt(player);
+        // A channel with a wildly wrong clock would poison the shared wall;
+        // treat it as PDT-less so it self-holds via the latency fallback.
+        if (edge_pdt !== null && Math.abs(edge_pdt - Date.now()) > CONVERGENCE_PDT_SANITY_LIMIT * 1000) {
+            edge_pdt = null;
+            playing_pdt = null;
+        }
+        collected.push({name: name, player: player, edge_pdt: edge_pdt, playing_pdt: playing_pdt});
+    }
+    return collected;
+}
+
+function run_convergence() {
+    if (convergence_disabled || !page_active()) {
+        return;
+    }
+    // The experimental latency-sync feature still exists (Phase 2 removes it);
+    // while the user has it enabled it keeps authority so the two controllers
+    // never fight over playbackRate.
+    if (latency_sync_enabled) {
+        return;
+    }
+    var players = collect_convergence_players();
+    if (!players.length) {
+        return;
+    }
+    var edges = [];
+    for (var i = 0; i < players.length; i++) {
+        if (players[i].edge_pdt !== null && players[i].playing_pdt !== null) {
+            edges.push(players[i].edge_pdt);
+        }
+    }
+    var target_pdt = compute_convergence_target(edges);
+    var now = Date.now();
+    for (i = 0; i < players.length; i++) {
+        var entry = players[i];
+        var video = entry.player.video;
+        try {
+            var behind;
+            if (target_pdt !== null && entry.playing_pdt !== null && entry.edge_pdt !== null) {
+                behind = (target_pdt - entry.playing_pdt) / 1000;
+            } else {
+                // No usable PDT -> this stream can't wall-clock align; hold it
+                // near its own live edge instead.
+                var latency = measure_player_latency(entry.player);
+                if (latency === null) {
+                    continue;
+                }
+                behind = latency - CONVERGENCE_HOLDBACK;
+            }
+            var bounds = player_seek_bounds(entry.player);
+            if (!bounds) {
+                continue;
+            }
+            var correction = convergence_correction(behind, video.currentTime || 0, bounds.start, bounds.end);
+            if (correction.seek_to !== null) {
+                video.playbackRate = 1;
+                if (now - (entry.player.last_convergence_seek_at || 0) >= CONVERGENCE_SEEK_COOLDOWN) {
+                    video.currentTime = correction.seek_to;
+                    entry.player.last_convergence_seek_at = now;
+                }
+            } else {
+                video.playbackRate = correction.playback_rate;
+            }
+        } catch (e) {
+            try {
+                video.playbackRate = 1;
+            } catch (e2) {}
+        }
+    }
 }
 
 // Chromium flips document.hidden to true when the window is fully occluded
