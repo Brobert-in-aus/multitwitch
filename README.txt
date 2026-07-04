@@ -29,9 +29,10 @@ Streams and playback:
   first-run default is 70% and unmuted.
 * Per-stream pause and resume controls.
 * Per-stream jump-to-live controls for correcting multi-stream drift.
-* Optional latency synchronization (experimental) that aligns streams to the
-  slowest live feed, with persisted extra-buffer and synced-tolerance settings.
-  May briefly desync after the tab is hidden, then re-aligns on return.
+* Automatic stream alignment: every stream is continuously steered toward the
+  same wall-clock moment (from HLS program-date-time), a few seconds behind
+  the slowest channel's live edge. Nothing to configure; may drift briefly
+  after the tab is hidden, then re-aligns on return. Disable with ?nosync=1.
 * Playback recovery when Chromium suspends background video, plus a distinct
   "Stream offline" state when Twitch confirms a failed channel is offline.
 * Hover overlays for stream title, channel name, and game metadata.

@@ -436,12 +436,6 @@ body.chat_resizing #chatbox iframe {
     vertical-align: middle;
 }
 
-.header_right {
-    align-items: center;
-    display: flex;
-    gap: 6px;
-}
-
 #brand_status {
     color: #98a2b3;
     font-size: 11px;
@@ -505,8 +499,7 @@ body.chat_resizing #chatbox iframe {
 }
 
 #twitch_auth_state,
-#stream_count,
-#latency_sync_state {
+#stream_count {
     background: #202733;
     border: 1px solid #344054;
     font-size: 11px;
@@ -520,15 +513,6 @@ body.chat_resizing #chatbox iframe {
 
 #twitch_auth_state {
     color: #98a2b3;
-}
-
-#latency_sync_state {
-    color: #98a2b3;
-}
-
-#latency_sync_state.state-active {
-    border-color: #2f6b4f;
-    color: #a7f3d0;
 }
 
 #twitch_auth_state.state-connected {
@@ -623,32 +607,15 @@ body.chat_resizing #chatbox iframe {
 }
 
 #main_size_value,
-#volume_value,
-#latency_sync_value,
-#latency_sync_tolerance_value {
+#volume_value {
     color: #d9e2ef;
 }
 
 #main_size_slider,
-#volume_slider,
-#latency_sync_slider,
-#latency_sync_tolerance_slider {
+#volume_slider {
     width: 100%;
     accent-color: #22d3ee;
     cursor: pointer;
-}
-
-/* "Experimental" chip next to a section title (amber, matches the setup state). */
-.experimental_tag {
-    background: #2a2310;
-    border: 1px solid #7c5e1a;
-    color: #fbbf24;
-    font-size: 9px;
-    font-weight: normal;
-    letter-spacing: 0;
-    margin-left: 6px;
-    padding: 1px 5px;
-    vertical-align: middle;
 }
 
 #main_volume_row .slider_label {

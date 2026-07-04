@@ -1,7 +1,8 @@
 # Obsoleting Stream Sync: always-on convergence to a shared near-live point
 
-**Status:** Phase 1 implemented (convergence controller, kill switch, tests);
-Phases 2–3 pending.
+**Status:** Phases 1–2 implemented (convergence controller in, old feature
+deleted: JS loop/UI, template panel, `show_stream_sync` flag, CSS, tests).
+Phase 3 (repurpose jump-to-live to snap to the shared target) pending.
 
 ## Goal
 

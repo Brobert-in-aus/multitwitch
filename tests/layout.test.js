@@ -142,43 +142,6 @@ test("stream metadata cache indexes logins case-insensitively", () => {
 });
 
 
-test("latency sync targets the slowest natural stream plus extra buffer", () => {
-    const {context, localStorage} = loadApplication();
-
-    const target = context.calculate_latency_sync_target([
-        {natural_latency: 4.2},
-        {natural_latency: 6.8},
-        {natural_latency: 5.1}
-    ], 3);
-
-    assert.equal(target, 9.8);
-    assert.equal(context.clamp_latency_sync_delay(42), 30);
-    assert.equal(context.clamp_latency_sync_delay(-2), 0);
-    localStorage.setItem("multitwitch.latencySyncDelay", "7");
-    assert.equal(context.load_saved_latency_sync_delay(), 7);
-});
-
-
-test("latency sync seeks large errors and gently corrects small drift", () => {
-    const {context} = loadApplication();
-
-    const behind = context.latency_sync_correction(10, 7, 100, 80, 120);
-    assert.equal(behind.seek_to, 103);
-    assert.equal(behind.playback_rate, 1);
-
-    // Small drift inside the nudge band (between an explicit tight tolerance and
-    // the seek threshold) is gently rate-corrected rather than seeked.
-    const ahead = context.latency_sync_correction(6.6, 7, 100, 80, 120, 0.2);
-    assert.equal(ahead.seek_to, null);
-    assert.ok(ahead.playback_rate < 1 && ahead.playback_rate >= 0.9,
-        "a stream that's ahead is gently slowed, not seeked");
-
-    const aligned = context.latency_sync_correction(7.1, 7, 100, 80, 120);
-    assert.equal(aligned.seek_to, null);
-    assert.equal(aligned.playback_rate, 1);
-});
-
-
 test("player latency prefers hls timing and falls back to the seekable edge", () => {
     const {context} = loadApplication();
     const video = {
@@ -194,7 +157,7 @@ test("player latency prefers hls timing and falls back to the seekable edge", ()
 });
 
 
-test("latency sync uses hls timeline data when native seek ranges are unavailable", () => {
+test("latency and seek bounds use hls timeline data when native seek ranges are unavailable", () => {
     const {context} = loadApplication();
     const player = {
         hls: {
@@ -208,27 +171,6 @@ test("latency sync uses hls timeline data when native seek ranges are unavailabl
     const bounds = context.player_seek_bounds(player);
     assert.equal(bounds.start, 60);
     assert.equal(bounds.end, 120);
-});
-
-
-test("sync tolerance widens the synced dead-band and is clamped", () => {
-    const {context, localStorage} = loadApplication();
-
-    // A 0.6s drift is "synced" under a 1.0s tolerance (default would nudge it).
-    const within = context.latency_sync_correction(7.6, 7, 100, 80, 120, 1.0);
-    assert.equal(within.seek_to, null);
-    assert.equal(within.playback_rate, 1);
-
-    // A large gap (past tolerance + the seek margin) seeks straight to live.
-    const beyond = context.latency_sync_correction(9, 7, 100, 80, 120, 1.0);
-    assert.equal(beyond.seek_to, 102);
-    assert.equal(beyond.playback_rate, 1);
-
-    assert.equal(context.clamp_latency_sync_tolerance(9), 3);          // above max
-    assert.equal(context.clamp_latency_sync_tolerance(0), 0.5);        // below min -> clamped up
-    assert.equal(context.clamp_latency_sync_tolerance(0.74), 0.7);     // rounds to a tenth
-    localStorage.setItem("multitwitch.latencySyncTolerance", "1.5");
-    assert.equal(context.load_saved_latency_sync_tolerance(), 1.5);
 });
 
 

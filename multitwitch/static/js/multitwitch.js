@@ -52,33 +52,17 @@ var stream_quality_choice = {};  // name -> requested quality label, survives re
 // Native HLS is the primary engine (lower latency, no proxy hop) whenever the
 // browser can actually play the stream. If native can't (e.g. Chromium that
 // reports HLS support but can't demux Twitch's MPEG-TS), the channel is pinned
-// to hls.js for subsequent reloads. Stream sync also requires hls.js.
+// to hls.js for subsequent reloads. Convergence steering also requires hls.js.
 var stream_force_hls_js = {};
 var quality_adapt_timer = null;
 // Only re-pick quality once tiles have stopped resizing for this long, so
 // dragging the main-size slider or a window edge doesn't thrash the players.
 var QUALITY_ADAPT_DELAY = 10000;
-var LATENCY_SYNC_DELAY_STORAGE_KEY = "multitwitch.latencySyncDelay";
-var LATENCY_SYNC_TOLERANCE_STORAGE_KEY = "multitwitch.latencySyncTolerance";
-var LATENCY_SYNC_INTERVAL = 2000;
-var LATENCY_SYNC_HARD_THRESHOLD = 0.75;
-// Default "considered synced" tolerance. The underlying latency is segment-
-// granular (~2s), so sub-second targets just chase measurement noise; ~1s is
-// about as tight as is meaningful.
-var LATENCY_SYNC_SOFT_THRESHOLD = 1.0;
-var LATENCY_SYNC_MIN_TOLERANCE = 0.5;
-var latency_sync_enabled = false;
-var latency_sync_extra_delay = load_saved_latency_sync_delay();
-var latency_sync_tolerance = load_saved_latency_sync_tolerance();
-var latency_sync_base_latency = null;
-var latency_sync_timer = null;
-// Convergence controller (Phase 1 of docs/obsolete-stream-sync.md): always-on
-// steering of every stream toward one shared wall-clock instant -- the slowest
-// healthy channel's live-edge program-date-time minus a fixed holdback. With a
-// single stream the same math degenerates to "hold ~4s behind my own edge", so
-// there is no mode and no toggle. Supersedes the experimental latency-sync
-// feature above, which keeps authority while the user has it enabled and is
-// deleted in Phase 2.
+// Convergence controller (docs/obsolete-stream-sync.md): always-on steering of
+// every stream toward one shared wall-clock instant -- the slowest healthy
+// channel's live-edge program-date-time minus a fixed holdback. With a single
+// stream the same math degenerates to "hold ~4s behind my own edge", so there
+// is no mode and no toggle. Replaced the experimental latency-sync feature.
 var CONVERGENCE_INTERVAL = 1000;
 // Matches liveSyncDuration below: how far behind the slowest channel's ingest
 // edge the shared instant sits (~2 segments of cushion).
@@ -349,7 +333,6 @@ function optimize_size(n) {
     render_current_streams();
     render_stream_together_actions();
     render_stream_together_results();
-    update_latency_sync_ui();
     schedule_quality_adaptation();
 }
 
@@ -1616,9 +1599,6 @@ function attach_hls_stream(tile, name, video, url) {
         startup_started_at: Date.now(),
         startup_progress_started_at: 0,
         last_audible_play_blocked_at: 0,
-        sync_natural_latency: null,
-        sync_smoothed_latency: null,
-        last_sync_seek_at: 0,
         last_convergence_seek_at: 0
     };
     $(video).off(".playbackRecovery")
@@ -1662,10 +1642,6 @@ function attach_hls_stream(tile, name, video, url) {
                     player.stalled = false;
                     set_player_status(tile, "");
                 }
-                if (!player.startup_pending && latency_sync_enabled &&
-                    player.sync_natural_latency === null) {
-                    setTimeout(run_latency_sync, 250);
-                }
             }
             update_stream_playback_state(name);
         })
@@ -1678,19 +1654,6 @@ function attach_hls_stream(tile, name, video, url) {
                 player.recovery_attempt = 0;
                 player.resume_blocked = false;
                 player.stalled = false;
-                // Each stream's measured latency sawtooths by ~1 segment as its
-                // playlist reloads (edge jumps, age resets). Smooth it at the
-                // timeupdate rate (~4x/s) so stream-sync compares stable values
-                // instead of chasing two out-of-phase sawtooths in and out of
-                // tolerance every couple of seconds.
-                if (latency_sync_enabled) {
-                    var lat_sample = measure_player_latency(player);
-                    if (lat_sample !== null) {
-                        player.sync_smoothed_latency = player.sync_smoothed_latency === null
-                            ? lat_sample
-                            : player.sync_smoothed_latency * 0.9 + lat_sample * 0.1;
-                    }
-                }
                 if (startup_progress_is_stable(player, now)) {
                     complete_stream_startup(name, player, tile);
                 }
@@ -1782,7 +1745,7 @@ function attach_hls_stream(tile, name, video, url) {
 }
 
 // hls.js is preferred wherever it runs: it reliably plays Twitch's MPEG-TS and
-// it's required for stream sync (native HLS exposes no latency/seek control).
+// it's required for convergence (native HLS exposes no latency/seek control).
 // Chromium 142+ (Chrome/Edge, Dec 2025) added a native HLS demuxer, which flips
 // canPlayType() truthy on desktop -- but that demuxer can't parse Twitch's
 // low-latency MPEG-TS prefetch streams (DEMUXER_ERROR_COULD_NOT_PARSE), so an
@@ -1836,25 +1799,6 @@ function clear_native_fallback_timer(player) {
     }
 }
 
-// Reload any stream whose engine no longer matches what it should be -- used when
-// stream sync is toggled, since sync requires hls.js and we prefer native without
-// it.
-function reconcile_player_engines() {
-    for (var name in stream_players) {
-        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
-            continue;
-        }
-        var player = stream_players[name];
-        if (!player || !player.video || player.manual_paused || player.recovering) {
-            continue;
-        }
-        var want = desired_player_engine(name, player.video);
-        if (want && player.engine && want !== player.engine) {
-            reload_stream_playback(name);
-        }
-    }
-}
-
 function startup_progress_is_stable(player, now) {
     if (!player || !player.startup_pending) {
         return false;
@@ -1875,9 +1819,6 @@ function complete_stream_startup(name, player, tile) {
     clear_native_fallback_timer(player);
     set_player_status(tile, "");
     sync_active_stream_audio();
-    if (latency_sync_enabled && player.sync_natural_latency === null) {
-        setTimeout(run_latency_sync, 250);
-    }
 }
 
 function retry_hls_startup_play(name, hls, video) {
@@ -2045,74 +1986,6 @@ function update_stream_latency_labels() {
     }
 }
 
-function load_saved_latency_sync_delay() {
-    try {
-        var saved = parseFloat(window.localStorage.getItem(LATENCY_SYNC_DELAY_STORAGE_KEY));
-        return isNaN(saved) ? 0 : clamp_latency_sync_delay(saved);
-    } catch (e) {
-        return 0;
-    }
-}
-
-function clamp_latency_sync_delay(value) {
-    value = parseFloat(value);
-    if (isNaN(value)) {
-        return 0;
-    }
-    return Math.max(0, Math.min(30, Math.round(value)));
-}
-
-function load_saved_latency_sync_tolerance() {
-    try {
-        var saved = parseFloat(window.localStorage.getItem(LATENCY_SYNC_TOLERANCE_STORAGE_KEY));
-        return isNaN(saved) ? LATENCY_SYNC_SOFT_THRESHOLD : clamp_latency_sync_tolerance(saved);
-    } catch (e) {
-        return LATENCY_SYNC_SOFT_THRESHOLD;
-    }
-}
-
-function clamp_latency_sync_tolerance(value) {
-    value = parseFloat(value);
-    if (isNaN(value)) {
-        return LATENCY_SYNC_SOFT_THRESHOLD;
-    }
-    // 0.5s .. 3.0s, to a tenth of a second.
-    return Math.max(LATENCY_SYNC_MIN_TOLERANCE, Math.min(3, Math.round(value * 10) / 10));
-}
-
-function set_latency_sync_tolerance(value) {
-    latency_sync_tolerance = clamp_latency_sync_tolerance(value);
-    try {
-        window.localStorage.setItem(LATENCY_SYNC_TOLERANCE_STORAGE_KEY, String(latency_sync_tolerance));
-    } catch (e) {}
-    update_latency_sync_ui();
-    if (latency_sync_enabled) {
-        run_latency_sync();
-    }
-}
-
-function initialize_latency_sync() {
-    latency_sync_extra_delay = load_saved_latency_sync_delay();
-    latency_sync_tolerance = load_saved_latency_sync_tolerance();
-    $("#latency_sync_slider").val(latency_sync_extra_delay);
-    $("#latency_sync_tolerance_slider").val(latency_sync_tolerance);
-    update_latency_sync_ui();
-    if (!latency_sync_timer) {
-        latency_sync_timer = setInterval(run_latency_sync, LATENCY_SYNC_INTERVAL);
-    }
-}
-
-function set_latency_sync_delay(value) {
-    latency_sync_extra_delay = clamp_latency_sync_delay(value);
-    try {
-        window.localStorage.setItem(LATENCY_SYNC_DELAY_STORAGE_KEY, String(latency_sync_extra_delay));
-    } catch (e) {}
-    update_latency_sync_ui();
-    if (latency_sync_enabled) {
-        run_latency_sync();
-    }
-}
-
 function measure_player_latency(player) {
     if (!player || !player.video) {
         return null;
@@ -2155,201 +2028,8 @@ function player_seek_bounds(player) {
     return null;
 }
 
-function calculate_latency_sync_target(players, extra_delay) {
-    var slowest = null;
-    for (var i = 0; i < players.length; i++) {
-        var latency = players[i].natural_latency;
-        if (typeof latency === "number" && isFinite(latency) && (slowest === null || latency > slowest)) {
-            slowest = latency;
-        }
-    }
-    return slowest === null ? null : slowest + clamp_latency_sync_delay(extra_delay);
-}
-
-function latency_sync_correction(latency, target, current_time, seek_start, seek_end, tolerance) {
-    if (tolerance === undefined) {
-        tolerance = LATENCY_SYNC_SOFT_THRESHOLD;
-    }
-    var error = latency - target;
-    var magnitude = Math.abs(error);
-    // Only a big gap (real lag, or a bad startup position) warrants a visible
-    // seek. Keep that threshold comfortably above the tolerance so ordinary drift
-    // is corrected by gently nudging the rate instead of jumping -- otherwise the
-    // stream looks like it falls out of sync and snaps back every time it drifts
-    // one tolerance-width.
-    var seek_threshold = Math.max(LATENCY_SYNC_HARD_THRESHOLD, tolerance + 1.0);
-    if (magnitude >= seek_threshold) {
-        var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + error));
-        return {seek_to: seek_to, playback_rate: 1};
-    }
-    // Within the user's tolerance -> considered synced, leave it alone.
-    if (magnitude < tolerance) {
-        return {seek_to: null, playback_rate: 1};
-    }
-    // Nudge the rate proportionally to the overrun so a wider gap is pulled back
-    // faster, ramping from ~3% up to ~6%.
-    var adjust = Math.min(0.06, 0.03 + (magnitude - tolerance) * 0.05);
-    return {seek_to: null, playback_rate: error > 0 ? 1 + adjust : 1 - adjust};
-}
-
-function collect_latency_sync_players() {
-    var measured = [];
-    for (var name in stream_players) {
-        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
-            continue;
-        }
-        var player = stream_players[name];
-        if (!player || player.manual_paused || !player.video) {
-            continue;
-        }
-        var raw_latency = measure_player_latency(player);
-        if (raw_latency === null) {
-            continue;
-        }
-        // Prefer the smoothed latency (fed at the timeupdate rate); fall back to
-        // the raw read until the first sample lands.
-        if (player.sync_smoothed_latency === null) {
-            player.sync_smoothed_latency = raw_latency;
-        }
-        var latency = player.sync_smoothed_latency;
-        if (player.sync_natural_latency === null) {
-            player.sync_natural_latency = latency;
-        }
-        measured.push({name: name, player: player, latency: latency, natural_latency: player.sync_natural_latency});
-    }
-    return measured;
-}
-
-function toggle_latency_sync() {
-    if (latency_sync_enabled) {
-        disable_latency_sync();
-        // Sync off -> drop the synced streams back to the low-latency native
-        // engine where the browser supports it.
-        reconcile_player_engines();
-        return;
-    }
-    latency_sync_enabled = true;
-    latency_sync_base_latency = null;
-    for (var name in stream_players) {
-        if (Object.prototype.hasOwnProperty.call(stream_players, name)) {
-            stream_players[name].sync_natural_latency = null;
-            stream_players[name].sync_smoothed_latency = null;
-        }
-    }
-    // Sync needs hls.js; swap any native players over before measuring.
-    reconcile_player_engines();
-    update_latency_sync_ui("Measuring");
-    run_latency_sync();
-}
-
-function disable_latency_sync(status) {
-    latency_sync_enabled = false;
-    latency_sync_base_latency = null;
-    for (var name in stream_players) {
-        if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
-            continue;
-        }
-        var player = stream_players[name];
-        player.sync_natural_latency = null;
-        if (player.video) {
-            player.video.playbackRate = 1;
-        }
-    }
-    update_latency_sync_ui(status);
-}
-
-function run_latency_sync() {
-    if (!latency_sync_enabled || !page_active()) {
-        return;
-    }
-    if (streams.length < 2) {
-        disable_latency_sync("Need 2 streams");
-        return;
-    }
-    var measured = collect_latency_sync_players();
-    if (measured.length < 2) {
-        for (var partial_name in stream_players) {
-            if (Object.prototype.hasOwnProperty.call(stream_players, partial_name) && stream_players[partial_name].video) {
-                stream_players[partial_name].video.playbackRate = 1;
-            }
-        }
-        update_latency_sync_ui("Measuring " + measured.length + "/" + streams.length);
-        return;
-    }
-    if (latency_sync_base_latency === null || measured.length === streams.length) {
-        latency_sync_base_latency = calculate_latency_sync_target(measured, 0);
-    }
-    var target = latency_sync_base_latency + latency_sync_extra_delay;
-    var corrected = 0;
-    var synced = 0;
-    var now = Date.now();
-    for (var i = 0; i < measured.length; i++) {
-        var item = measured[i];
-        var video = item.player.video;
-        try {
-            var bounds = player_seek_bounds(item.player);
-            if (!bounds) {
-                continue;
-            }
-            var correction = latency_sync_correction(
-                item.latency,
-                target,
-                video.currentTime || 0,
-                bounds.start,
-                bounds.end,
-                latency_sync_tolerance
-            );
-            if (correction.seek_to !== null && now - item.player.last_sync_seek_at >= 1500) {
-                video.playbackRate = 1;
-                video.currentTime = correction.seek_to;
-                item.player.last_sync_seek_at = now;
-                // The seek jumps currentTime, so the smoothed latency is now
-                // stale -- re-seed it from the next fresh sample.
-                item.player.sync_smoothed_latency = null;
-                corrected += 1;
-            } else {
-                video.playbackRate = correction.playback_rate;
-                if (correction.playback_rate === 1) {
-                    synced += 1;
-                }
-            }
-            if (!item.player.manual_paused && video.paused) {
-                safe_play(video);
-            }
-        } catch (e) {
-            video.playbackRate = 1;
-        }
-    }
-    var status = target.toFixed(1) + "s target";
-    if (measured.length < streams.length) {
-        status += " · " + measured.length + "/" + streams.length;
-    } else if (corrected) {
-        status += " · Aligning";
-    } else if (synced === measured.length) {
-        status += " · In sync";
-    }
-    update_latency_sync_ui(status);
-}
-
-function update_latency_sync_ui(status) {
-    var enough_streams = streams.length >= 2;
-    var button = $("#latency_sync_button");
-    button.prop("disabled", !enough_streams && !latency_sync_enabled)
-        .toggleClass("primary", latency_sync_enabled)
-        .attr("aria-pressed", latency_sync_enabled ? "true" : "false")
-        .text(latency_sync_enabled ? "Stop sync" : "Sync streams");
-    $("#latency_sync_value").text("+" + latency_sync_extra_delay + "s");
-    $("#latency_sync_tolerance_value").text("±" + latency_sync_tolerance.toFixed(1) + "s");
-    if (!status && latency_sync_enabled && latency_sync_base_latency !== null) {
-        status = (latency_sync_base_latency + latency_sync_extra_delay).toFixed(1) + "s target";
-    }
-    $("#latency_sync_state")
-        .toggleClass("state-active", latency_sync_enabled)
-        .text(status || (enough_streams ? "Ready" : "Need 2 streams"));
-}
-
 // --- Convergence controller ------------------------------------------------
-// Always-on near-live alignment (Phase 1 of docs/obsolete-stream-sync.md).
+// Always-on near-live alignment (docs/obsolete-stream-sync.md).
 
 // Debug bypass while the controller soaks: ?nosync=1 in the URL, or
 // localStorage "multitwitch.nosync" = "1". Checked once at startup.
@@ -2511,12 +2191,6 @@ function run_convergence() {
     if (convergence_disabled || !page_active()) {
         return;
     }
-    // The experimental latency-sync feature still exists (Phase 2 removes it);
-    // while the user has it enabled it keeps authority so the two controllers
-    // never fight over playbackRate.
-    if (latency_sync_enabled) {
-        return;
-    }
     var players = collect_convergence_players();
     if (!players.length) {
         return;
@@ -2601,8 +2275,8 @@ function snap_player_to_live(player) {
 // Coming back to the foreground: nudge paused players back to play and reset
 // stall tracking so the background gap isn't mistaken for a freeze. Browsers
 // pause muted background video, so on return the players are stuck wherever they
-// were -- snap them back to live (unless the user is actively syncing streams,
-// where the sync pass realigns them instead).
+// were -- snap them back to live; the convergence tick then settles everyone
+// onto the shared wall.
 function resume_all_after_inactive() {
     if (!page_active()) {
         return;
@@ -2623,14 +2297,9 @@ function resume_all_after_inactive() {
         // away, so it stays near live -- snapping it would restart its loader and
         // stall it. Leave playing streams alone.
         if (player.video.paused) {
-            if (!latency_sync_enabled) {
-                snap_player_to_live(player);
-            }
+            snap_player_to_live(player);
             safe_play(player.video);
         }
-    }
-    if (latency_sync_enabled) {
-        setTimeout(run_latency_sync, 500);
     }
 }
 
@@ -2842,9 +2511,6 @@ function sync_to_live(name, event) {
         event.stopPropagation();
     }
     reveal_tile_controls(stream_tile_by_name(name));
-    if (latency_sync_enabled) {
-        disable_latency_sync("Stopped");
-    }
     var player = stream_players[name];
     if (!player || !player.video) {
         load_direct_stream(stream_tile_by_name(name), name, true);
@@ -3436,8 +3102,8 @@ function render_stream_together_actions() {
     }
 }
 
-// Generic collapsible panel (Presets, Stream sync). Stream Together has its own
-// variant because it also manages the match-highlight state.
+// Generic collapsible panel (Presets). Stream Together has its own variant
+// because it also manages the match-highlight state.
 function toggle_panel_collapsed(panel_id) {
     set_panel_collapsed(panel_id, !$("#" + panel_id).hasClass("is_collapsed"));
 }
