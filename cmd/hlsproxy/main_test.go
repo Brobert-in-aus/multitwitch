@@ -114,6 +114,40 @@ func TestRewritePlaylistPrefetchPromotedToSegment(t *testing.T) {
 	}
 }
 
+func TestRewritePlaylistPrefetchDroppedForFMP4(t *testing.T) {
+	// fMP4/CMAF playlists (Twitch "Enhanced Broadcasting") carry an
+	// #EXT-X-MAP init segment. Promoting prefetch there desyncs hls.js's
+	// media-sequence bookkeeping across refreshes -> fatal "media sequence
+	// mismatch" loops. For fMP4 the prefetch tags are dropped while the init
+	// segment and real segments survive.
+	body := strings.Join([]string{
+		`#EXTM3U`,
+		`#EXT-X-VERSION:6`,
+		`#EXT-X-MAP:URI="https://video-edge.cloudfront.hls.ttvnw.net/v1/segment/init.mp4"`,
+		`#EXTINF:2.000,live`,
+		`https://video-edge.cloudfront.hls.ttvnw.net/v1/segment/AAA.mp4`,
+		`#EXT-X-TWITCH-PREFETCH:https://video-edge.cloudfront.hls.ttvnw.net/v1/segment/BBB.mp4`,
+		`#EXT-X-TWITCH-PREFETCH:https://video-edge.cloudfront.hls.ttvnw.net/v1/segment/CCC.mp4`,
+	}, "\n")
+
+	got := rewritePlaylist(body, "https://aps23.playlist.ttvnw.net/v1/playlist/AAA.m3u8")
+
+	if strings.Contains(got, "#EXT-X-TWITCH-PREFETCH") {
+		t.Errorf("prefetch tag survived for fMP4:\n%s", got)
+	}
+	// Prefetch segments are dropped, not promoted.
+	if strings.Contains(got, "BBB.mp4") || strings.Contains(got, "CCC.mp4") {
+		t.Errorf("prefetch segment promoted for fMP4 (should be dropped):\n%s", got)
+	}
+	// Init segment and the real segment survive.
+	if !strings.Contains(got, `#EXT-X-MAP:URI="https://video-edge.cloudfront.hls.ttvnw.net/v1/segment/init.mp4"`) {
+		t.Errorf("init segment lost:\n%s", got)
+	}
+	if !strings.Contains(got, "https://video-edge.cloudfront.hls.ttvnw.net/v1/segment/AAA.mp4") {
+		t.Errorf("real segment lost:\n%s", got)
+	}
+}
+
 func TestPlaylistCacheTTL(t *testing.T) {
 	c := newPlaylistCache()
 	c.set("https://x/y.m3u8", "body")

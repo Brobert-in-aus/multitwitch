@@ -119,10 +119,21 @@ func resolveReference(baseURL, ref string) string {
 // #EXT-X-TWITCH-PREFETCH tags that hls.js doesn't understand; those are
 // promoted to normal #EXTINF segments so hls.js reaches the true edge
 // instead of sitting needlessly behind it.
+//
+// That promotion is safe for MPEG-TS but breaks fMP4/CMAF ("Enhanced
+// Broadcasting" channels, marked by an #EXT-X-MAP init segment): hls.js
+// recomputes media-sequence continuity when it merges successive playlist
+// refreshes, and the synthetic prefetch segments (whose URLs differ from the
+// real segments they become one refresh later) desync that bookkeeping,
+// surfacing as fatal "media sequence mismatch" levelParsingError loops that
+// stutter/reconnect the player. For fMP4 we drop the prefetch tags and let
+// hls.js follow the normal live edge -- a couple of segments more latency in
+// exchange for stable playback. Mirrors direct.py's _rewrite_playlist.
 func rewritePlaylist(body, baseURL string) string {
 	lines := strings.Split(body, "\n")
 	out := make([]string, 0, len(lines))
 
+	isFMP4 := strings.Contains(body, "#EXT-X-MAP")
 	nextURIIsPlaylist := false
 	lastSegmentDuration := 2.0
 	haveDuration := false
@@ -131,6 +142,9 @@ func rewritePlaylist(body, baseURL string) string {
 		stripped := strings.TrimSpace(line)
 
 		if strings.HasPrefix(stripped, prefetchTag) {
+			if isFMP4 {
+				continue
+			}
 			prefetchURI := strings.TrimSpace(stripped[len(prefetchTag):])
 			if prefetchURI != "" {
 				duration := 2.0
