@@ -272,6 +272,26 @@ test("edge PDT de-quantizes the 2s playlist staircase with playlist age", () => 
 });
 
 
+test("long-segment playlists derive a deeper convergence holdback", () => {
+    const {context} = loadApplication();
+    const details = {
+        live: true,
+        fragments: [
+            {programDateTime: 1700000000000, duration: 4.17},
+            {programDateTime: 1700000004170, duration: 4.17},
+            {programDateTime: 1700000008340, duration: 4.17}
+        ]
+    };
+
+    assert.equal(context.details_segment_duration(details), 4.17);
+    assert.equal(context.details_holdback_seconds(details), 10);
+    assert.ok(Math.abs(context.details_min_buffer_seconds(details) - 6.255) < 0.001);
+    assert.equal(context.details_startup_latency_seconds(details), 12);
+    assert.equal(context.details_holdback_seconds({fragments: [{duration: 2}]}), 6);
+    assert.equal(context.details_startup_latency_seconds({fragments: [{duration: 2}]}), 8);
+});
+
+
 test("displayed latency prefers the capped PDT read over hls.latency", () => {
     const {context} = loadApplication();
     const base = Date.now();
@@ -293,6 +313,40 @@ test("displayed latency prefers the capped PDT read over hls.latency", () => {
     assert.ok(Math.abs(shown - 7) < 0.1, "capped PDT latency, got " + shown);
     // Without PDT it falls back to the classic measurement.
     assert.equal(context.display_stream_latency({hls: {latency: 5.5}, video: {currentTime: 100}}), 5.5);
+});
+
+
+test("displayed sync offset compares playback to the shared wall", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    function fakePlayer(edgeOffsetMs, playingOffsetMs, duration) {
+        return {
+            engine: "hls",
+            manual_paused: false,
+            recovering: false,
+            startup_pending: false,
+            hls: {
+                playingDate: new Date(base + playingOffsetMs),
+                latestLevelDetails: {
+                    live: true,
+                    age: 0,
+                    fragments: [
+                        {programDateTime: base + edgeOffsetMs - duration * 2000, duration},
+                        {programDateTime: base + edgeOffsetMs - duration * 1000, duration}
+                    ]
+                }
+            },
+            video: {currentTime: 100}
+        };
+    }
+
+    context.stream_players.normal = fakePlayer(0, -10000, 2);
+    context.stream_players.long = fakePlayer(0, -10400, 4.17);
+
+    assert.equal(context.display_stream_sync_offset(context.stream_players.normal), 0);
+    assert.ok(Math.abs(context.display_stream_sync_offset(context.stream_players.long) - 0.4) < 0.001);
+    assert.equal(context.format_stream_sync_offset(0.4), "+0.4s");
+    assert.equal(context.format_stream_sync_offset(-0.4), "-0.4s");
 });
 
 
@@ -343,6 +397,57 @@ test("convergence steers every healthy stream toward the shared wall", () => {
     assert.equal(context.stream_players.lost.video.playbackRate, 1);
     assert.equal(context.stream_players.lost.video.currentTime, 110);
     assert.ok(context.stream_players.lost.last_convergence_seek_at > 0);
+});
+
+
+test("long-segment streams anchor the shared wall at their safe holdback", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    function fakePlayer(edgeOffsetMs, playingOffsetMs, duration) {
+        return {
+            engine: "hls",
+            manual_paused: false,
+            recovering: false,
+            startup_pending: false,
+            last_convergence_seek_at: 0,
+            hls: {
+                playingDate: new Date(base + playingOffsetMs),
+                latestLevelDetails: {
+                    live: true,
+                    age: 0,
+                    fragments: [
+                        {programDateTime: base + edgeOffsetMs - duration * 2000, duration},
+                        {programDateTime: base + edgeOffsetMs - duration * 1000, duration}
+                    ]
+                }
+            },
+            video: {
+                currentTime: 100,
+                playbackRate: 1,
+                paused: false,
+                seekable: {length: 1, start: () => 50, end: () => 120}
+            }
+        };
+    }
+
+    context.stream_players.normal = fakePlayer(0, -6000, 2);
+    context.stream_players.long = fakePlayer(0, -10000, 4.17);
+
+    context.run_convergence();
+
+    assert.equal(context.stream_players.normal.video.playbackRate, 1);
+    assert.equal(context.stream_players.long.video.playbackRate, 1);
+});
+
+
+test("long-segment speedups wait for a segment-sized forward buffer", () => {
+    const {context} = loadApplication();
+
+    const starved = context.convergence_correction(2.0, 100, 80, 120, 5.0, 6.255);
+    assert.equal(starved.playback_rate, 1);
+
+    const fed = context.convergence_correction(2.0, 100, 80, 120, 7.0, 6.255);
+    assert.ok(fed.playback_rate > 1);
 });
 
 

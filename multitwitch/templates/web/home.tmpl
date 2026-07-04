@@ -249,7 +249,7 @@ $(window).resize(function() {
 
     <h3>Per-stream controls</h3>
     <p>Hover a tile for pause/resume and jump-to-live buttons, plus its title, channel, and game. A stream that goes offline is shown distinctly rather than just stalling.</p>
-    <p>Streams automatically stay aligned to the same moment, a few seconds behind live &mdash; there's nothing to configure.</p>
+    <p>Streams automatically stay aligned to the same moment behind live &mdash; there's nothing to configure. Some channels publish longer video segments, so the shared target may sit a little further back to keep playback smooth. The hover badge shows each stream's offset from that sync target when available, not just its raw delay from live.</p>
 
     <h3>Keyboard shortcuts</h3>
     <ul>
@@ -277,6 +277,7 @@ $(window).resize(function() {
 <div id="helptext">
 <p>A personal control deck for watching several <a href="https://twitch.tv/">Twitch</a> channels in one window. Add channels straight in the URL &mdash; for example <a href="/gamesdonequick/esamarathon">/gamesdonequick/esamarathon</a> &mdash; or use the control deck on the left to add them one at a time.</p>
 <p>Pick a <strong>Grid</strong>, <strong>1 Main</strong>, <strong>2 Wide</strong>, or <strong>2 Stack</strong> layout, click any stream to make it the audio source, set the master volume, and drop into theatre mode (press <strong>T</strong>, <strong>Esc</strong> to leave). Twitch chat opens in tabs beside the video.</p>
+<p>Streams automatically align to the same live moment. Longer-segment channels may move the shared target a little further back for smoother playback; the hover badge shows offset from sync where available.</p>
 <p>Keyboard: <strong>1</strong>&ndash;<strong>9</strong> set the audio source, <strong>M</strong> mutes, <strong>C</strong> toggles chat, and with a stream under your cursor <strong>F</strong> fullscreens it while <strong>P</strong> pops it out (picture-in-picture). <strong>Shift-click</strong> a stream to mix in its audio with its own volume.</p>
 <p>Connect your Twitch account to load followed channels with live status and optional go-live notifications. <strong>Stream Together</strong> collaborators are discovered automatically for loaded channels.</p>
 <p>Click the <strong>?</strong> in the top-right corner any time for the full feature list.</p>

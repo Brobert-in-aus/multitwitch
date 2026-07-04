@@ -60,27 +60,32 @@ var quality_adapt_timer = null;
 var QUALITY_ADAPT_DELAY = 10000;
 // Convergence controller (docs/obsolete-stream-sync.md): always-on steering of
 // every stream toward one shared wall-clock instant -- the slowest healthy
-// channel's live-edge program-date-time minus a fixed holdback. With a single
+// channel's live-edge program-date-time minus a safe holdback. With a single
 // stream the same math degenerates to "hold ~4s behind my own edge", so there
 // is no mode and no toggle. Replaced the experimental latency-sync feature.
 var CONVERGENCE_INTERVAL = 1000;
-// Matches liveSyncDuration below: how far behind the slowest channel's ingest
-// edge the shared instant sits. 3 segments, not 2: the prefetch-promoted edge
-// is essentially realtime, but the newest segment is drip-fed as it's produced,
-// so the *downloadable* frontier measured ~3.5s (worst ~5s) behind the edge on
-// live Twitch TS streams. A 4s holdback sat inside that zone and starved the
-// buffer (speed up -> stall -> fall back -> loop); 6s leaves ~2s of cushion.
+// Minimum holdback behind each channel's ingest edge. Normal Twitch TS streams
+// are ~2s per segment, so 6s == 3 segments. Some channels emit ~4.17s segments,
+// where a fixed 6s holdback is only ~1.4 segments and can sit inside the
+// drip-fed frontier. The controller therefore derives a per-channel floor from
+// actual fragment durations and keeps this value as the minimum for ordinary
+// streams.
 var CONVERGENCE_HOLDBACK = 6;
+var CONVERGENCE_HOLDBACK_SEGMENTS = 3;
+var CONVERGENCE_MAX_HOLDBACK = 10;
 // Forward-buffer floor for rate increases. Speeding up with a thin buffer just
 // drives the playhead into the delivery frontier no matter where the wall is,
 // so catch-up waits until at least this much media is buffered ahead.
 var CONVERGENCE_MIN_BUFFER = 3;
+var CONVERGENCE_MIN_BUFFER_SEGMENTS = 1.5;
 // Where a fresh stream starts, before the controller glides it onto the wall.
 // Deliberately deeper than the holdback: at 8s every segment the player wants
 // is complete and downloadable at wire speed, so startup is smooth (starting
 // at the holdback itself put the first seconds inside the drip-fed frontier
 // zone and stuttered), and the glide in is a gentle imperceptible speed-up.
 var CONVERGENCE_STARTUP_LATENCY = 8;
+var CONVERGENCE_STARTUP_SEGMENTS = 4;
+var CONVERGENCE_MAX_STARTUP_LATENCY = 12;
 // The PDT signal has no per-segment sawtooth, so the dead-band only needs to
 // cover playlist fetch jitter and cross-channel ingest-timestamp skew.
 var CONVERGENCE_DEADBAND = 0.3;
@@ -1973,10 +1978,10 @@ function initialize_playback_recovery() {
     setInterval(update_stream_latency_labels, 1000);
 }
 
-// Latency for display: prefer the capped-PDT measurement the convergence
-// controller steers on. hls.latency measures against the raw in-flight edge,
-// which on long-segment channels (4s+) swings by up to two segment durations
-// as playlists re-base -- the PDT read is smooth and honest.
+// Latency for display fallback: prefer the capped-PDT measurement over
+// hls.latency. hls.latency measures against the raw in-flight edge, which on
+// long-segment channels (4s+) swings by up to two segment durations as
+// playlists re-base.
 function display_stream_latency(player) {
     var edge = player_edge_pdt(player);
     var playing = player_playing_pdt(player);
@@ -1986,8 +1991,26 @@ function display_stream_latency(player) {
     return measure_player_latency(player);
 }
 
-// Refresh each tile's "behind live" readout (revealed on hover). Lightly smoothed
-// so the per-segment sawtooth in the raw measurement doesn't make it flicker.
+function display_stream_sync_offset(player) {
+    var target = convergence_target_pdt();
+    var playing = player_playing_pdt(player);
+    if (target !== null && playing !== null) {
+        return (target - playing) / 1000;
+    }
+    return null;
+}
+
+function format_stream_sync_offset(offset) {
+    if (Math.abs(offset) < 0.05) {
+        offset = 0;
+    }
+    return (offset > 0 ? "+" : "") + offset.toFixed(1) + "s";
+}
+
+// Refresh each tile's sync readout (revealed on hover). Prefer the offset from
+// the shared wall over raw live latency: two streams can be visually aligned
+// while intentionally sitting at different distances from their own live edges.
+// Light smoothing keeps measurement noise from flickering.
 function update_stream_latency_labels() {
     for (var name in stream_players) {
         if (!Object.prototype.hasOwnProperty.call(stream_players, name)) {
@@ -2006,16 +2029,21 @@ function update_stream_latency_labels() {
             label.text("").removeAttr("title");
             continue;
         }
-        var latency = player && !player.manual_paused ? display_stream_latency(player) : null;
-        if (latency === null || !isFinite(latency)) {
+        var offset = player && !player.manual_paused ? display_stream_sync_offset(player) : null;
+        var value = offset !== null ? offset : (player && !player.manual_paused ? display_stream_latency(player) : null);
+        if (value === null || !isFinite(value)) {
             player.display_latency = null;
             label.text("").removeAttr("title");
             continue;
         }
         player.display_latency = player.display_latency == null
-            ? latency
-            : player.display_latency * 0.5 + latency * 0.5;
-        label.text(player.display_latency.toFixed(1) + "s").attr("title", "Delay behind live");
+            ? value
+            : player.display_latency * 0.5 + value * 0.5;
+        if (offset !== null) {
+            label.text(format_stream_sync_offset(player.display_latency)).attr("title", "Offset from sync target");
+        } else {
+            label.text(player.display_latency.toFixed(1) + "s").attr("title", "Delay behind live");
+        }
     }
 }
 
@@ -2143,6 +2171,67 @@ function player_edge_pdt(player) {
     }
 }
 
+function details_segment_duration(details) {
+    if (!details || !details.fragments || !details.fragments.length) {
+        return null;
+    }
+    var durations = [];
+    var start = Math.max(0, details.fragments.length - 8);
+    for (var i = start; i < details.fragments.length; i++) {
+        var duration = details.fragments[i] && details.fragments[i].duration;
+        if (typeof duration === "number" && isFinite(duration) && duration > 0.25 && duration < 30) {
+            durations.push(duration);
+        }
+    }
+    if (!durations.length) {
+        return null;
+    }
+    durations.sort(function(a, b) { return a - b; });
+    return durations[Math.floor(durations.length / 2)];
+}
+
+function details_holdback_seconds(details) {
+    var segment_duration = details_segment_duration(details);
+    if (segment_duration === null) {
+        return CONVERGENCE_HOLDBACK;
+    }
+    return Math.min(CONVERGENCE_MAX_HOLDBACK,
+        Math.max(CONVERGENCE_HOLDBACK, segment_duration * CONVERGENCE_HOLDBACK_SEGMENTS));
+}
+
+function player_holdback_seconds(player) {
+    try {
+        return details_holdback_seconds(player && player.hls && player.hls.latestLevelDetails);
+    } catch (e) {
+        return CONVERGENCE_HOLDBACK;
+    }
+}
+
+function details_min_buffer_seconds(details) {
+    var segment_duration = details_segment_duration(details);
+    if (segment_duration === null) {
+        return CONVERGENCE_MIN_BUFFER;
+    }
+    return Math.max(CONVERGENCE_MIN_BUFFER, segment_duration * CONVERGENCE_MIN_BUFFER_SEGMENTS);
+}
+
+function player_min_buffer_seconds(player) {
+    try {
+        return details_min_buffer_seconds(player && player.hls && player.hls.latestLevelDetails);
+    } catch (e) {
+        return CONVERGENCE_MIN_BUFFER;
+    }
+}
+
+function details_startup_latency_seconds(details) {
+    var segment_duration = details_segment_duration(details);
+    if (segment_duration === null) {
+        return CONVERGENCE_STARTUP_LATENCY;
+    }
+    return Math.min(CONVERGENCE_MAX_STARTUP_LATENCY,
+        Math.max(CONVERGENCE_STARTUP_LATENCY, segment_duration * CONVERGENCE_STARTUP_SEGMENTS));
+}
+
 // The shared wall: the newest wall-clock instant every healthy channel has
 // delivered, minus the holdback. `edges` is an array of edge PDTs in ms. An
 // edge trailing the freshest by more than the straggler limit is a stalled
@@ -2180,6 +2269,37 @@ function compute_convergence_target(edges, holdback_seconds, straggler_limit_sec
     return slowest - holdback_seconds * 1000;
 }
 
+function compute_convergence_target_for_players(players, straggler_limit_seconds) {
+    if (straggler_limit_seconds === undefined) {
+        straggler_limit_seconds = CONVERGENCE_STRAGGLER_LIMIT;
+    }
+    var freshest = null;
+    var i, entry;
+    for (i = 0; i < players.length; i++) {
+        entry = players[i];
+        if (entry.edge_pdt !== null && typeof entry.edge_pdt === "number" && isFinite(entry.edge_pdt) &&
+            entry.playing_pdt !== null && (freshest === null || entry.edge_pdt > freshest)) {
+            freshest = entry.edge_pdt;
+        }
+    }
+    if (freshest === null) {
+        return null;
+    }
+    var target = null;
+    for (i = 0; i < players.length; i++) {
+        entry = players[i];
+        if (entry.edge_pdt === null || typeof entry.edge_pdt !== "number" || !isFinite(entry.edge_pdt) ||
+            entry.playing_pdt === null || freshest - entry.edge_pdt > straggler_limit_seconds * 1000) {
+            continue;
+        }
+        var candidate = entry.edge_pdt - entry.holdback_seconds * 1000;
+        if (target === null || candidate < target) {
+            target = candidate;
+        }
+    }
+    return target;
+}
+
 // behind > 0 -> the playhead is showing an older instant than the target.
 // Within the dead-band: converged, leave it alone. Up to the seek threshold:
 // proportional rate nudge with asymmetric caps (speeding toward live is far
@@ -2187,7 +2307,10 @@ function compute_convergence_target(edges, holdback_seconds, straggler_limit_sec
 // inside the seekable range. buffered_ahead (optional, seconds of media
 // buffered past the playhead) gates speed-ups: with a thin buffer a rate
 // increase can only starve playback, so hold 1x and let the buffer refill.
-function convergence_correction(behind, current_time, seek_start, seek_end, buffered_ahead) {
+function convergence_correction(behind, current_time, seek_start, seek_end, buffered_ahead, min_buffer) {
+    if (min_buffer === undefined) {
+        min_buffer = CONVERGENCE_MIN_BUFFER;
+    }
     var magnitude = Math.abs(behind);
     if (magnitude >= CONVERGENCE_SEEK_THRESHOLD) {
         var seek_to = Math.max(seek_start + 0.1, Math.min(seek_end - 0.25, current_time + behind));
@@ -2197,7 +2320,7 @@ function convergence_correction(behind, current_time, seek_start, seek_end, buff
         return {seek_to: null, playback_rate: 1};
     }
     if (behind > 0 && buffered_ahead !== null && buffered_ahead !== undefined &&
-        buffered_ahead < CONVERGENCE_MIN_BUFFER) {
+        buffered_ahead < min_buffer) {
         return {seek_to: null, playback_rate: 1};
     }
     var fraction = (magnitude - CONVERGENCE_DEADBAND) /
@@ -2244,7 +2367,14 @@ function collect_convergence_players() {
             edge_pdt = null;
             playing_pdt = null;
         }
-        collected.push({name: name, player: player, edge_pdt: edge_pdt, playing_pdt: playing_pdt});
+        collected.push({
+            name: name,
+            player: player,
+            edge_pdt: edge_pdt,
+            playing_pdt: playing_pdt,
+            holdback_seconds: player_holdback_seconds(player),
+            min_buffer_seconds: player_min_buffer_seconds(player)
+        });
     }
     return collected;
 }
@@ -2254,13 +2384,7 @@ function collect_convergence_players() {
 // (snap-to-live, startup bias). Null when no player has usable PDT.
 function convergence_target_pdt() {
     var players = collect_convergence_players();
-    var edges = [];
-    for (var i = 0; i < players.length; i++) {
-        if (players[i].edge_pdt !== null && players[i].playing_pdt !== null) {
-            edges.push(players[i].edge_pdt);
-        }
-    }
-    return compute_convergence_target(edges);
+    return compute_convergence_target_for_players(players);
 }
 
 // Born converged: hls.js starts a fresh stream CONVERGENCE_HOLDBACK behind its
@@ -2281,7 +2405,9 @@ function bias_startup_toward_wall(name, hls, details) {
         return;
     }
     var target_pdt = convergence_target_pdt();
+    var startup_latency = details_startup_latency_seconds(details);
     if (target_pdt === null) {
+        hls.config.liveSyncDuration = startup_latency;
         return;
     }
     var desired = (edge_pdt - target_pdt) / 1000;
@@ -2290,8 +2416,8 @@ function bias_startup_toward_wall(name, hls, details) {
     }
     // Never start closer than the startup hold-back (smooth-start floor);
     // never chase a stalled group further back than the straggler limit.
-    hls.config.liveSyncDuration = Math.max(CONVERGENCE_STARTUP_LATENCY,
-        Math.min(CONVERGENCE_HOLDBACK + CONVERGENCE_STRAGGLER_LIMIT, desired));
+    hls.config.liveSyncDuration = Math.max(startup_latency,
+        Math.min(details_holdback_seconds(details) + CONVERGENCE_STRAGGLER_LIMIT, desired));
 }
 
 function run_convergence() {
@@ -2302,15 +2428,9 @@ function run_convergence() {
     if (!players.length) {
         return;
     }
-    var edges = [];
-    for (var i = 0; i < players.length; i++) {
-        if (players[i].edge_pdt !== null && players[i].playing_pdt !== null) {
-            edges.push(players[i].edge_pdt);
-        }
-    }
-    var target_pdt = compute_convergence_target(edges);
+    var target_pdt = compute_convergence_target_for_players(players);
     var now = Date.now();
-    for (i = 0; i < players.length; i++) {
+    for (var i = 0; i < players.length; i++) {
         var entry = players[i];
         var video = entry.player.video;
         try {
@@ -2324,7 +2444,7 @@ function run_convergence() {
                 // that zone is inside the delivery frontier and only starves.
                 var own_latency = measure_player_latency(entry.player);
                 if (own_latency !== null) {
-                    behind = Math.min(behind, own_latency - CONVERGENCE_HOLDBACK);
+                    behind = Math.min(behind, own_latency - entry.holdback_seconds);
                 }
             } else {
                 // No usable PDT -> this stream can't wall-clock align; hold it
@@ -2333,14 +2453,14 @@ function run_convergence() {
                 if (latency === null) {
                     continue;
                 }
-                behind = latency - CONVERGENCE_HOLDBACK;
+                behind = latency - entry.holdback_seconds;
             }
             var bounds = player_seek_bounds(entry.player);
             if (!bounds) {
                 continue;
             }
             var correction = convergence_correction(behind, video.currentTime || 0,
-                bounds.start, bounds.end, player_buffered_ahead(video));
+                bounds.start, bounds.end, player_buffered_ahead(video), entry.min_buffer_seconds);
             if (correction.seek_to !== null) {
                 video.playbackRate = 1;
                 if (now - (entry.player.last_convergence_seek_at || 0) >= CONVERGENCE_SEEK_COOLDOWN) {
