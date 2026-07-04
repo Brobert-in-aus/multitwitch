@@ -75,6 +75,12 @@ var CONVERGENCE_HOLDBACK = 6;
 // drives the playhead into the delivery frontier no matter where the wall is,
 // so catch-up waits until at least this much media is buffered ahead.
 var CONVERGENCE_MIN_BUFFER = 3;
+// Where a fresh stream starts, before the controller glides it onto the wall.
+// Deliberately deeper than the holdback: at 8s every segment the player wants
+// is complete and downloadable at wire speed, so startup is smooth (starting
+// at the holdback itself put the first seconds inside the drip-fed frontier
+// zone and stuttered), and the glide in is a gentle imperceptible speed-up.
+var CONVERGENCE_STARTUP_LATENCY = 8;
 // The PDT signal has no per-segment sawtooth, so the dead-band only needs to
 // cover playlist fetch jitter and cross-channel ingest-timestamp skew.
 var CONVERGENCE_DEADBAND = 0.3;
@@ -1685,8 +1691,10 @@ function attach_hls_stream(tile, name, video, url) {
     var engine = desired_player_engine(name, video);
     stream_players[name].engine = engine;
     if (engine === "hls") {
-        // Start CONVERGENCE_HOLDBACK behind the (prefetch-promoted) edge, so a
-        // fresh stream lands on or near the shared wall. We use liveSyncDuration
+        // Start CONVERGENCE_STARTUP_LATENCY behind the (prefetch-promoted)
+        // edge -- deep enough that every wanted segment is complete, for a
+        // smooth start; the convergence tick then glides the stream onto the
+        // shared wall. We use liveSyncDuration
         // in seconds rather than a segment count because Twitch can report a
         // large target duration; with lowLatencyMode on, hls.js derived its
         // hold-back from 3x that and started ~18s back. An absolute value pins
@@ -1697,7 +1705,7 @@ function attach_hls_stream(tile, name, video, url) {
         // reason. The earlier "needs a click to start" was an autoplay-blocker
         // browser extension, not this config.
         var hls = new Hls({
-            liveSyncDuration: CONVERGENCE_HOLDBACK,
+            liveSyncDuration: CONVERGENCE_STARTUP_LATENCY,
             nudgeMaxRetry: 5,
             // Bound the MSE SourceBuffer hard, per tile, so a multi-hour session
             // across several streams can't climb until the tab dies with "Out of
@@ -1965,6 +1973,19 @@ function initialize_playback_recovery() {
     setInterval(update_stream_latency_labels, 1000);
 }
 
+// Latency for display: prefer the capped-PDT measurement the convergence
+// controller steers on. hls.latency measures against the raw in-flight edge,
+// which on long-segment channels (4s+) swings by up to two segment durations
+// as playlists re-base -- the PDT read is smooth and honest.
+function display_stream_latency(player) {
+    var edge = player_edge_pdt(player);
+    var playing = player_playing_pdt(player);
+    if (edge !== null && playing !== null) {
+        return (edge - playing) / 1000;
+    }
+    return measure_player_latency(player);
+}
+
 // Refresh each tile's "behind live" readout (revealed on hover). Lightly smoothed
 // so the per-segment sawtooth in the raw measurement doesn't make it flicker.
 function update_stream_latency_labels() {
@@ -1985,7 +2006,7 @@ function update_stream_latency_labels() {
             label.text("").removeAttr("title");
             continue;
         }
-        var latency = player && !player.manual_paused ? measure_player_latency(player) : null;
+        var latency = player && !player.manual_paused ? display_stream_latency(player) : null;
         if (latency === null || !isFinite(latency)) {
             player.display_latency = null;
             label.text("").removeAttr("title");
@@ -2101,7 +2122,14 @@ function details_edge_pdt(details) {
     if (!frag || typeof frag.programDateTime !== "number" || !isFinite(frag.programDateTime)) {
         return null;
     }
-    return frag.programDateTime + (frag.duration || 0) * 1000 + (details.age || 0) * 1000;
+    var edge = frag.programDateTime + (frag.duration || 0) * 1000 + (details.age || 0) * 1000;
+    // Promoted prefetch segments advertise in-flight content, so the raw edge
+    // can sit up to ~2 segment durations past realtime (measured +4s on a
+    // channel with 4.17s segments) -- and by a different amount per channel,
+    // which would inflate cross-channel offsets and push other streams several
+    // seconds further behind than needed. Content cannot exist in the future:
+    // cap at the client clock.
+    return Math.min(edge, Date.now());
 }
 
 function player_edge_pdt(player) {
@@ -2260,9 +2288,9 @@ function bias_startup_toward_wall(name, hls, details) {
     if (!isFinite(desired)) {
         return;
     }
-    // Never start closer than the standard hold-back; never chase a stalled
-    // group further back than the straggler limit allows.
-    hls.config.liveSyncDuration = Math.max(CONVERGENCE_HOLDBACK,
+    // Never start closer than the startup hold-back (smooth-start floor);
+    // never chase a stalled group further back than the straggler limit.
+    hls.config.liveSyncDuration = Math.max(CONVERGENCE_STARTUP_LATENCY,
         Math.min(CONVERGENCE_HOLDBACK + CONVERGENCE_STRAGGLER_LIMIT, desired));
 }
 

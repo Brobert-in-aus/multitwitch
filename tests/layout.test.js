@@ -252,10 +252,47 @@ test("edge PDT de-quantizes the 2s playlist staircase with playlist age", () => 
 
     // Last fragment PDT + its duration + time since the playlist was fetched.
     assert.equal(context.player_edge_pdt(player), 1700000005500);
+    // Promoted prefetch segments can push the raw edge past realtime (their
+    // content is still being written); the estimate is capped at the clock.
+    const now = Date.now();
+    const future = context.player_edge_pdt({
+        hls: {
+            latestLevelDetails: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: now, duration: 4.2}]
+            }
+        }
+    });
+    assert.ok(future <= Date.now() && future >= now - 50, "capped at the clock: " + (future - now));
     // VODs / playlists without PDT -> no edge estimate.
     assert.equal(context.player_edge_pdt({hls: {latestLevelDetails: {live: false, fragments: []}}}), null);
     assert.equal(context.player_edge_pdt({hls: {latestLevelDetails: {live: true, fragments: [{duration: 2}]}}}), null);
     assert.equal(context.player_edge_pdt({hls: null}), null);
+});
+
+
+test("displayed latency prefers the capped PDT read over hls.latency", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    // hls.latency measures against the raw in-flight edge (here inflated to
+    // 11s); the PDT read caps the edge at the clock -> honest ~7s.
+    const player = {
+        hls: {
+            latency: 11,
+            playingDate: new Date(base - 7000),
+            latestLevelDetails: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: base, duration: 4.2}]
+            }
+        },
+        video: {currentTime: 100}
+    };
+    const shown = context.display_stream_latency(player);
+    assert.ok(Math.abs(shown - 7) < 0.1, "capped PDT latency, got " + shown);
+    // Without PDT it falls back to the classic measurement.
+    assert.equal(context.display_stream_latency({hls: {latency: 5.5}, video: {currentTime: 100}}), 5.5);
 });
 
 
@@ -507,7 +544,7 @@ test("startup bias raises the hold-back so new streams are born on the wall", ()
         },
         video: {currentTime: 100, seekable: {length: 1, start: () => 50, end: () => 120}}
     };
-    const hls = {config: {liveSyncDuration: 6}};
+    const hls = {config: {liveSyncDuration: 8}};
     context.stream_players.fresh = {engine: "hls", startup_pending: true, hls};
     function details(edgeOffsetMs) {
         return {
@@ -518,25 +555,26 @@ test("startup bias raises the hold-back so new streams are born on the wall", ()
     }
 
     // Fast channel (edge -1000) joining a slower group: start 11s back, on the
-    // wall, instead of 6s back and ahead of it.
+    // wall, instead of 8s back and ahead of it.
     context.bias_startup_toward_wall("fresh", hls, details(-1000));
     assert.equal(hls.config.liveSyncDuration, 11);
 
-    // A channel slower than the wall never starts closer than the holdback.
+    // A channel slower than the wall never starts closer than the smooth-start
+    // floor.
     context.bias_startup_toward_wall("fresh", hls, details(-13000));
-    assert.equal(hls.config.liveSyncDuration, 6);
+    assert.equal(hls.config.liveSyncDuration, 8);
 
     // After startup the bias no-ops (the convergence tick has authority).
-    hls.config.liveSyncDuration = 6;
+    hls.config.liveSyncDuration = 8;
     context.stream_players.fresh.startup_pending = false;
     context.bias_startup_toward_wall("fresh", hls, details(-1000));
-    assert.equal(hls.config.liveSyncDuration, 6);
+    assert.equal(hls.config.liveSyncDuration, 8);
 
     // No other healthy players -> no wall -> default hold-back stands.
     context.stream_players.fresh.startup_pending = true;
     delete context.stream_players.anchor;
     context.bias_startup_toward_wall("fresh", hls, details(-1000));
-    assert.equal(hls.config.liveSyncDuration, 6);
+    assert.equal(hls.config.liveSyncDuration, 8);
 });
 
 

@@ -56,7 +56,12 @@ hls.js therefore exposes:
   aliasing.** This kills the entire `sync_smoothed_latency` apparatus.
 - Fragment `programDateTime` + duration on the last fragment of
   `hls.latestLevelDetails`, plus `details.age` → the channel's **live-edge PDT**:
-  the wall-clock moment currently coming off the wire for that channel.
+  the wall-clock moment currently coming off the wire for that channel. Capped
+  at the client clock: promoted prefetch segments advertise in-flight content,
+  so the raw estimate can sit up to ~2 segment durations past realtime
+  (measured +4s on a channel with 4.17s segments), by a different amount per
+  channel — uncapped, that spurious offset pushed other streams several
+  seconds further behind than the slowest channel actually required.
 
 Prefetch-promoted segments (we synthesise `#EXTINF` for them in the proxies, no
 PDT tag) are handled by hls.js's standard extrapolation: PDT of the last tagged
@@ -134,10 +139,13 @@ two.
 
 ### Startup alignment
 
-Keep `liveSyncDuration` equal to `HOLDBACK`. A fresh attach then lands within
-cross-channel ingest skew of the shared target, and the rate controller trims
-the remainder invisibly — no visible "attach, then jump" double-seek, and no
-need to thread a `startPosition` through attach.
+`liveSyncDuration` is `STARTUP_LATENCY` (8s) — deliberately deeper than the
+holdback. At 8s behind the edge every segment the player wants is complete and
+downloads at wire speed, so startup is smooth; starting at the holdback itself
+put the first seconds inside the drip-fed frontier zone and stuttered. The
+controller then glides the stream forward onto the wall with an imperceptible
+speed-up. The startup bias (`bias_startup_toward_wall`) uses the same value as
+its floor when the wall sits even further back.
 
 ### Fallbacks / graceful degradation
 
