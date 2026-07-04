@@ -1,8 +1,11 @@
 # Obsoleting Stream Sync: always-on convergence to a shared near-live point
 
-**Status:** Phases 1–2 implemented (convergence controller in, old feature
-deleted: JS loop/UI, template panel, `show_stream_sync` flag, CSS, tests).
-Phase 3 (repurpose jump-to-live to snap to the shared target) pending.
+**Status:** All three phases implemented. Phase 3 additions: ⟳ / snap-to-live
+seeks to the shared wall (edge−0.5 only as the no-PDT fallback), and a startup
+bias (`bias_startup_toward_wall`) raises a fresh instance's `liveSyncDuration`
+on LEVEL_LOADED so streams joining a slower group start on the wall instead of
+ahead of it. Not done: the optional merge of the latency-label interval into
+the convergence tick (cosmetic; both run at 1s).
 
 ## Goal
 

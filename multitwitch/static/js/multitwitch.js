@@ -1712,6 +1712,9 @@ function attach_hls_stream(tile, name, video, url) {
         hls.on(Hls.Events.MANIFEST_PARSED, function() {
             retry_hls_startup_play(name, hls, video);
         });
+        hls.on(Hls.Events.LEVEL_LOADED, function(event, data) {
+            bias_startup_toward_wall(name, hls, data && data.details);
+        });
         hls.on(Hls.Events.FRAG_BUFFERED, function() {
             retry_hls_startup_play(name, hls, video);
         });
@@ -2081,16 +2084,7 @@ function player_playing_pdt(player) {
 // continuous estimate -- the two terms form complementary sawtooths. Promoted
 // prefetch segments carry no PDT tag; hls.js extrapolates theirs from the last
 // tagged fragment plus durations.
-function player_edge_pdt(player) {
-    if (!player || !player.hls) {
-        return null;
-    }
-    var details = null;
-    try {
-        details = player.hls.latestLevelDetails;
-    } catch (e) {
-        return null;
-    }
+function details_edge_pdt(details) {
     if (!details || !details.live || !details.fragments || !details.fragments.length) {
         return null;
     }
@@ -2099,6 +2093,17 @@ function player_edge_pdt(player) {
         return null;
     }
     return frag.programDateTime + (frag.duration || 0) * 1000 + (details.age || 0) * 1000;
+}
+
+function player_edge_pdt(player) {
+    if (!player || !player.hls) {
+        return null;
+    }
+    try {
+        return details_edge_pdt(player.hls.latestLevelDetails);
+    } catch (e) {
+        return null;
+    }
 }
 
 // The shared wall: the newest wall-clock instant every healthy channel has
@@ -2187,6 +2192,51 @@ function collect_convergence_players() {
     return collected;
 }
 
+// The shared wall as currently computable from the healthy players -- the same
+// derivation run_convergence uses each tick, exposed for one-shot callers
+// (snap-to-live, startup bias). Null when no player has usable PDT.
+function convergence_target_pdt() {
+    var players = collect_convergence_players();
+    var edges = [];
+    for (var i = 0; i < players.length; i++) {
+        if (players[i].edge_pdt !== null && players[i].playing_pdt !== null) {
+            edges.push(players[i].edge_pdt);
+        }
+    }
+    return compute_convergence_target(edges);
+}
+
+// Born converged: hls.js starts a fresh stream CONVERGENCE_HOLDBACK behind its
+// own edge, but the shared wall may sit further back (a slower channel anchors
+// the group), which would leave the newcomer ahead of the wall, drifting back
+// at 0.95x for a minute. Raise this instance's hold-back so playback lands on
+// the wall directly. hls.js reads liveSyncDuration lazily when it picks the
+// live start position, so mutating it in the LEVEL_LOADED handler -- before
+// the first buffering tick -- is honored.
+function bias_startup_toward_wall(name, hls, details) {
+    var player = stream_players[name];
+    if (!player || player.hls !== hls || !player.startup_pending || !hls.config) {
+        return;
+    }
+    var edge_pdt = details_edge_pdt(details);
+    if (edge_pdt === null ||
+        Math.abs(edge_pdt - Date.now()) > CONVERGENCE_PDT_SANITY_LIMIT * 1000) {
+        return;
+    }
+    var target_pdt = convergence_target_pdt();
+    if (target_pdt === null) {
+        return;
+    }
+    var desired = (edge_pdt - target_pdt) / 1000;
+    if (!isFinite(desired)) {
+        return;
+    }
+    // Never start closer than the standard hold-back; never chase a stalled
+    // group further back than the straggler limit allows.
+    hls.config.liveSyncDuration = Math.max(CONVERGENCE_HOLDBACK,
+        Math.min(CONVERGENCE_HOLDBACK + CONVERGENCE_STRAGGLER_LIMIT, desired));
+}
+
 function run_convergence() {
     if (convergence_disabled || !page_active()) {
         return;
@@ -2249,9 +2299,12 @@ function page_active() {
     return !document.hidden;
 }
 
-// Restart the loader from the live edge and seek the playback head up to it.
-// Used after the player has fallen behind (tab/window backgrounded, manual
-// jump-to-live) -- a no-op when already at the edge.
+// Restart the loader from the live edge and seek the playhead to the shared
+// convergence wall. Used after the player has fallen behind (tab/window
+// backgrounded, manual jump-to-live). Snapping to the raw edge instead would
+// start a fight the convergence tick wins two ticks later; targeting the wall
+// makes ⟳ mean "re-align now". Falls back to just-behind-the-edge when no
+// wall is computable (native engine, no PDT) -- a no-op when already there.
 function snap_player_to_live(player) {
     if (!player || !player.video) {
         return;
@@ -2263,11 +2316,22 @@ function snap_player_to_live(player) {
     } catch (e) {}
     try {
         var video = player.video;
-        if (video.seekable && video.seekable.length) {
-            var live_edge = video.seekable.end(video.seekable.length - 1);
-            if (live_edge - (video.currentTime || 0) > 0.5) {
-                video.currentTime = Math.max(0, live_edge - 0.5);
-            }
+        var seek_to = null;
+        var target_pdt = convergence_target_pdt();
+        var playing_pdt = player_playing_pdt(player);
+        if (target_pdt !== null && playing_pdt !== null) {
+            seek_to = (video.currentTime || 0) + (target_pdt - playing_pdt) / 1000;
+        }
+        var bounds = player_seek_bounds(player);
+        if (!bounds) {
+            return;
+        }
+        if (seek_to === null) {
+            seek_to = bounds.end - 0.5;
+        }
+        seek_to = Math.max(bounds.start + 0.1, Math.min(bounds.end - 0.25, seek_to));
+        if (Math.abs(seek_to - (video.currentTime || 0)) > 0.5) {
+            video.currentTime = Math.max(0, seek_to);
         }
     } catch (e) {}
 }
