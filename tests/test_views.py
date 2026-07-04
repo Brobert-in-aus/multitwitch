@@ -169,6 +169,33 @@ class HlsProxyTests(unittest.TestCase):
         self.assertEqual(result[6], '#EXTINF:2.000,')
         self.assertEqual(result[7], 'https://cdn.hls.ttvnw.net/seg-3.ts')
 
+    def test_rewrite_drops_prefetch_for_fmp4_playlists(self):
+        # fMP4/CMAF playlists (Twitch "Enhanced Broadcasting") carry an
+        # #EXT-X-MAP init segment. Promoting prefetch there desyncs hls.js's
+        # media-sequence bookkeeping across refreshes -> fatal "media sequence
+        # mismatch" loops. For fMP4 the prefetch tags are dropped entirely while
+        # the init segment and real segments are preserved.
+        base = 'https://aps23.playlist.ttvnw.net/v1/playlist/abc.m3u8'
+        body = '\n'.join([
+            '#EXTM3U',
+            '#EXT-X-VERSION:6',
+            '#EXT-X-MAP:URI="https://cdn.hls.ttvnw.net/init.mp4"',
+            '#EXTINF:2.000,',
+            'https://cdn.hls.ttvnw.net/seg-1.mp4',
+            '#EXT-X-TWITCH-PREFETCH:https://cdn.hls.ttvnw.net/seg-2.mp4',
+            '#EXT-X-TWITCH-PREFETCH:https://cdn.hls.ttvnw.net/seg-3.mp4',
+        ])
+
+        joined = direct._rewrite_playlist(body, base)
+
+        self.assertNotIn('#EXT-X-TWITCH-PREFETCH', joined)
+        # Prefetch segments are dropped, not promoted.
+        self.assertNotIn('seg-2.mp4', joined)
+        self.assertNotIn('seg-3.mp4', joined)
+        # The init segment and the real segment survive untouched.
+        self.assertIn('#EXT-X-MAP:URI="https://cdn.hls.ttvnw.net/init.mp4"', joined)
+        self.assertIn('https://cdn.hls.ttvnw.net/seg-1.mp4', joined)
+
     def test_missing_or_disallowed_url_returns_400(self):
         missing = direct.hls_proxy(SimpleNamespace(params={}))
         self.assertEqual(missing.status_code, 400)

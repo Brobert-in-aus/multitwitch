@@ -173,6 +173,10 @@ def _rewrite_playlist(body, base_url):
     lines = []
     next_uri_is_playlist = False
     last_segment_duration = None
+    # fMP4/CMAF media playlists (Twitch "Enhanced Broadcasting" channels) carry an
+    # #EXT-X-MAP init segment. For those we must NOT promote prefetch segments --
+    # see the prefetch branch below.
+    is_fmp4 = '#EXT-X-MAP' in body
     for line in body.split('\n'):
         stripped = line.strip()
         # Twitch advertises its true live edge -- the freshest one or two
@@ -184,7 +188,19 @@ def _rewrite_playlist(body, base_url):
         # ahead of the playback head (which sits liveSyncDurationCount segments
         # back) and only plays it once it's complete -- that buffer cushion is
         # also what absorbs lag spikes.
+        #
+        # This promotion is safe for MPEG-TS but breaks fMP4: hls.js recomputes
+        # media-sequence continuity when it merges successive playlist refreshes,
+        # and the synthetic prefetch segments (whose URLs differ from the real
+        # segments they become one refresh later) desync that bookkeeping. On
+        # fMP4 that surfaces as a fatal "media sequence mismatch" levelParsingError
+        # every couple of seconds; the player reloads and snaps to the live edge
+        # each time, producing constant stutter/reconnect. For fMP4 we drop the
+        # prefetch tags entirely and let hls.js follow the normal live edge -- a
+        # couple of segments more latency in exchange for stable playback.
         if stripped.startswith(PREFETCH_TAG):
+            if is_fmp4:
+                continue
             prefetch_uri = stripped[len(PREFETCH_TAG):].strip()
             if prefetch_uri:
                 duration = last_segment_duration if last_segment_duration is not None else 2.0
