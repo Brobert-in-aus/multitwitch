@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -15,6 +16,23 @@ def response_json(response):
 
 
 class WebViewTests(unittest.TestCase):
+    def test_template_asset_version_matches_displayed_js_version(self):
+        root = os.path.dirname(os.path.dirname(__file__))
+        template_path = os.path.join(root, 'multitwitch', 'templates', 'web', 'home.tmpl')
+        script_path = os.path.join(root, 'multitwitch', 'static', 'js', 'multitwitch.js')
+
+        with open(template_path, encoding='utf-8') as f:
+            template = f.read()
+        with open(script_path, encoding='utf-8') as f:
+            script = f.read()
+
+        asset_version = re.search(r'{% set asset_version = (\d+) %}', template)
+        app_version = re.search(r'var APP_VERSION = "(\d+)";', script)
+
+        self.assertIsNotNone(asset_version)
+        self.assertIsNotNone(app_version)
+        self.assertEqual(asset_version.group(1), app_version.group(1))
+
     def test_home_normalizes_deduplicates_and_rejects_invalid_channels(self):
         request = SimpleNamespace(
             matchdict={'streams': ['GamesDoneQuick', 'gamesdonequick', 'bad-name', 'Other_Channel']},
