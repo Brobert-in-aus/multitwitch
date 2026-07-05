@@ -1477,6 +1477,27 @@ test("live follow tooltip includes the game and stream title", () => {
     assert.equal(context.live_follow_tooltip(null), "");
 });
 
+test("followed stream rows format viewer counts like Twitch", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.format_viewer_count(7000), "7K");
+    assert.equal(context.format_viewer_count(5700), "5.7K");
+    assert.equal(context.format_viewer_count(566), "566");
+    assert.equal(context.format_viewer_count(1250000), "1.3M");
+    assert.equal(context.format_viewer_count(null), "");
+});
+
+test("followed stream title prefers live title and falls back to cached metadata", () => {
+    const {context} = loadApplication();
+
+    context.stream_metadata.example = {title: "Cached title", game_name: "Cached game"};
+
+    assert.equal(context.follow_stream_title("example", {title: "Live title", game_name: "Live game"}), "Live title");
+    assert.equal(context.follow_stream_title("example", {game_name: "Live game"}), "Live game");
+    assert.equal(context.follow_stream_title("example", null), "Cached title");
+    assert.equal(context.follow_stream_title("missing", null), "");
+});
+
 
 test("stream API diagnostics identify failures before hls.js starts", () => {
     const {context} = loadApplication();

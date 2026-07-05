@@ -679,6 +679,28 @@ body.chat_resizing #chatbox iframe {
     width: 100%;
 }
 
+.follow_sort_control {
+    align-items: center;
+    color: #98a2b3;
+    display: grid;
+    font-size: 11px;
+    gap: 6px;
+    grid-template-columns: auto 1fr;
+    margin: 0 0 8px;
+    text-transform: uppercase;
+}
+
+.follow_sort_control select {
+    background: #07090c;
+    border: 1px solid #344054;
+    box-sizing: border-box;
+    color: #f7f7f8;
+    font: inherit;
+    padding: 6px 7px;
+    text-transform: none;
+    width: 100%;
+}
+
 #followed_channels {
     display: grid;
     gap: 5px;
@@ -714,11 +736,57 @@ body.chat_resizing #chatbox iframe {
     opacity: 0.4;
 }
 
+.follow_details,
 .follow_name,
+.follow_title,
 .current_stream span {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+}
+
+.follow_details {
+    display: grid;
+    flex: 1 1 auto;
+    gap: 2px;
+    min-width: 0;
+}
+
+.follow_name {
+    color: #f7f7f8;
+}
+
+.follow_title {
+    color: #d0d5dd;
+    font-size: 12px;
+}
+
+.follow_stats {
+    align-items: flex-end;
+    display: grid;
+    flex: 0 0 auto;
+    gap: 2px;
+    justify-items: end;
+    min-width: 48px;
+}
+
+.follow_viewers {
+    color: #f7f7f8;
+    font-size: 12px;
+    line-height: 1.15;
+    min-height: 14px;
+    white-space: nowrap;
+}
+
+.follow_item.is_live .follow_viewers::before {
+    background: #ef4444;
+    border-radius: 999px;
+    content: "";
+    display: inline-block;
+    height: 6px;
+    margin-right: 4px;
+    vertical-align: 1px;
+    width: 6px;
 }
 
 .follow_meta {

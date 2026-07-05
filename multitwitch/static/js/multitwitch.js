@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "119";
+var APP_VERSION = "120";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -4591,6 +4591,7 @@ function render_followed_channels() {
         return;
     }
     var filter = $.trim($("#follow_filter").val() || "").toLowerCase();
+    var sort_mode = $("#follow_sort").val() || "name";
     hide_follow_tooltip();
     container.empty();
     if (!followed_channels.length) {
@@ -4603,6 +4604,13 @@ function render_followed_channels() {
         var b_live = twitch_live_channels[b.broadcaster_login] ? 1 : 0;
         if (a_live != b_live) {
             return b_live - a_live;
+        }
+        if (sort_mode === "views" && a_live && b_live) {
+            var a_viewers = Number(twitch_live_channels[a.broadcaster_login].viewers || 0);
+            var b_viewers = Number(twitch_live_channels[b.broadcaster_login].viewers || 0);
+            if (a_viewers != b_viewers) {
+                return b_viewers - a_viewers;
+            }
         }
         return a.broadcaster_name.localeCompare(b.broadcaster_name);
     });
@@ -4617,11 +4625,19 @@ function render_followed_channels() {
         shown++;
         var live = twitch_live_channels[login];
         var in_lineup = streams.indexOf(login) != -1;
+        var title = follow_stream_title(login, live);
+        var viewers = live ? format_viewer_count(live.viewers) : "";
+        var meta = in_lineup ? "Added" : (live ? "Live" : "Followed");
+        var stats = $("<span>", {"class": "follow_stats"})
+            .append($("<span>", {"class": "follow_viewers"}).text(viewers))
+            .append($("<span>", {"class": "follow_meta"}).text(meta));
         var item = $("<button>", {type: "button", "class": "follow_item", disabled: in_lineup})
-            .toggleClass("is_live", !!live)
+            .toggleClass("is_live", !!live && !in_lineup)
             .toggleClass("in_lineup", in_lineup)
-            .append($("<span>", {"class": "follow_name"}).text((in_lineup ? "(streaming) " : "") + name))
-            .append($("<span>", {"class": "follow_meta"}).text(in_lineup ? "Added" : (live ? "Live" : "Followed")));
+            .append($("<span>", {"class": "follow_details"})
+                .append($("<span>", {"class": "follow_name"}).text(name))
+                .append($("<span>", {"class": "follow_title"}).text(title)))
+            .append(stats);
         if (!in_lineup) {
             item.click((function(stream_name) {
                 return function() {
@@ -4644,6 +4660,34 @@ function render_followed_channels() {
     if (!shown) {
         container.append($("<div>", {"class": "empty_state"}).text("No matches."));
     }
+}
+
+function follow_stream_title(login, live) {
+    var key = String(login || "").toLowerCase();
+    var metadata = stream_metadata[key] || {};
+    return (live && (live.title || live.game_name)) ||
+        metadata.title ||
+        metadata.game_name ||
+        "";
+}
+
+function format_viewer_count(count) {
+    var viewers = Number(count);
+    if (!isFinite(viewers) || viewers <= 0) {
+        return "";
+    }
+    if (viewers >= 1000000) {
+        return trim_count_decimal(viewers / 1000000) + "M";
+    }
+    if (viewers >= 1000) {
+        return trim_count_decimal(viewers / 1000) + "K";
+    }
+    return String(Math.round(viewers));
+}
+
+function trim_count_decimal(value) {
+    var rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
+    return String(rounded).replace(/\.0$/, "");
 }
 
 function live_follow_tooltip(live) {

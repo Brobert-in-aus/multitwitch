@@ -4,6 +4,7 @@ import re
 import secrets
 import sqlite3
 import time
+from contextlib import contextmanager
 from http.cookies import SimpleCookie
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -658,17 +659,25 @@ def _absolute_path(path):
     return os.path.abspath(path)
 
 
+@contextmanager
 def _session_connection(request):
     db_path = _twitch_settings(request)['session_db']
     db_dir = os.path.dirname(db_path)
     if db_dir and not os.path.exists(db_dir):
         os.makedirs(db_dir)
     conn = sqlite3.connect(db_path)
-    conn.execute(
-        'CREATE TABLE IF NOT EXISTS twitch_sessions '
-        '(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)'
-    )
-    return conn
+    try:
+        conn.execute(
+            'CREATE TABLE IF NOT EXISTS twitch_sessions '
+            '(id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at INTEGER NOT NULL)'
+        )
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _load_session(request, session_id):

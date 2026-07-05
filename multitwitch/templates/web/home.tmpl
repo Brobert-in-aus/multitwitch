@@ -1,4 +1,4 @@
-{% set asset_version = 119 %}
+{% set asset_version = 120 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -163,6 +163,13 @@ $(window).resize(function() {
             <span>Notify when follows go live</span>
         </label>
         <input type="text" id="follow_filter" placeholder="Filter follows" onkeyup="render_followed_channels()" />
+        <label class="follow_sort_control">
+            <span>Sort</span>
+            <select id="follow_sort" onchange="render_followed_channels()">
+                <option value="name">Live, then name</option>
+                <option value="views">Live viewers</option>
+            </select>
+        </label>
         <div id="followed_channels"></div>
     </div>
 
