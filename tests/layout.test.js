@@ -486,6 +486,53 @@ test("long-segment streams anchor the shared wall at their safe holdback", () =>
 });
 
 
+test("a single-tick behind spike is slew-limited and does not seek", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    function fakePlayer(playingOffsetMs) {
+        return {
+            engine: "hls",
+            manual_paused: false,
+            recovering: false,
+            startup_pending: false,
+            last_convergence_seek_at: 0,
+            hls: {
+                playingDate: new Date(base + playingOffsetMs),
+                latestLevelDetails: {
+                    live: true,
+                    age: 0,
+                    fragments: [{programDateTime: base - 2000, duration: 2}]
+                }
+            },
+            video: {
+                currentTime: 100,
+                playbackRate: 1,
+                paused: false,
+                seekable: {length: 1, start: () => 50, end: () => 120}
+            }
+        };
+    }
+    // Single stream: edge_pdt = base, holdback 6s -> target = base - 6000.
+    const player = fakePlayer(-8000);  // playing_pdt = base - 8000 -> 2s behind
+    context.stream_players.solo = player;
+
+    // Tick 1 establishes a steady 2s behind (speeds up, no seek).
+    context.run_convergence();
+    assert.ok(player.video.playbackRate > 1 && player.video.playbackRate <= 1.15);
+    assert.equal(player.video.currentTime, 100);
+    assert.equal(player.last_convergence_seek_at, 0);
+
+    // Tick 2: playingDate jumps back 3s in a single tick -> raw behind = 5s,
+    // which without the slew limit would cross the 4s seek threshold and seek.
+    // The clamp holds the step to 1.5s (behind = 3.5s), so it nudges instead.
+    player.hls.playingDate = new Date(base - 11000);
+    context.run_convergence();
+    assert.equal(player.video.currentTime, 100, "no seek should occur");
+    assert.equal(player.last_convergence_seek_at, 0, "no seek should be recorded");
+    assert.ok(player.video.playbackRate > 1 && player.video.playbackRate <= 1.15);
+});
+
+
 test("straggler state requires consecutive enter and exit ticks", () => {
     const {context} = loadApplication();
     const fresh = {

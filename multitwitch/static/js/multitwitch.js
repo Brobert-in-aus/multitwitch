@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "122";
+var APP_VERSION = "123";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -109,6 +109,14 @@ var CONVERGENCE_STRAGGLER_EXIT_TICKS = 2;
 // have a broken clock and self-holds via the latency fallback instead.
 var CONVERGENCE_PDT_SANITY_LIMIT = 300;
 var CONVERGENCE_SEEK_COOLDOWN = 3000;  // ms; must exceed CONVERGENCE_INTERVAL
+// Max physical tick-to-tick change in `behind` (seconds). Between ticks the
+// convergence target advances ~1x wall-clock and the playhead moves 0..~1.15x,
+// so `behind` cannot legitimately move more than ~1.2s per 1s tick. Larger
+// steps are PDT artifacts: prefetch-promoted segments carry extrapolated
+// program-date-times, so both the edge and hls.js's playingDate can jump ~a
+// segment between playlist refreshes. Slew-limiting `behind` to this bound
+// rejects those without affecting real drift. See run_convergence.
+var CONVERGENCE_MAX_BEHIND_STEP = 1.5;
 var convergence_timer = null;
 var convergence_disabled = false;
 var stream_load_pending = {};
@@ -2921,6 +2929,26 @@ function run_convergence() {
                 }
                 behind = latency - entry.holdback_seconds;
             }
+            // Slew-limit `behind` against non-physical PDT jumps (see
+            // CONVERGENCE_MAX_BEHIND_STEP). A lone spike can no longer cross the
+            // seek threshold -- that was surfacing as a visible forward-seek
+            // hitch -- and the prefetch sawtooth that made a smoothly-playing
+            // stream needlessly speed up/slow down is smoothed out. Skip when
+            // the previous sample is stale (tab was inactive) or was cleared by
+            // a seek, so a genuine reposition isn't fought.
+            var behind_raw = behind;
+            var prev_behind = entry.player.last_behind;
+            if (prev_behind !== null && prev_behind !== undefined &&
+                now - (entry.player.last_behind_at || 0) <= CONVERGENCE_INTERVAL * 2) {
+                var step = behind - prev_behind;
+                if (step > CONVERGENCE_MAX_BEHIND_STEP) {
+                    behind = prev_behind + CONVERGENCE_MAX_BEHIND_STEP;
+                } else if (step < -CONVERGENCE_MAX_BEHIND_STEP) {
+                    behind = prev_behind - CONVERGENCE_MAX_BEHIND_STEP;
+                }
+            }
+            entry.player.last_behind = behind;
+            entry.player.last_behind_at = now;
             var bounds = player_seek_bounds(entry.player);
             if (!bounds) {
                 continue;
@@ -2932,6 +2960,9 @@ function run_convergence() {
                 if (now - (entry.player.last_convergence_seek_at || 0) >= CONVERGENCE_SEEK_COOLDOWN) {
                     video.currentTime = correction.seek_to;
                     entry.player.last_convergence_seek_at = now;
+                    // The playhead just moved; the next tick's `behind` reflects
+                    // a new position, so don't slew-limit against the old one.
+                    entry.player.last_behind = null;
                 }
             } else {
                 video.playbackRate = correction.playback_rate;
@@ -2939,6 +2970,7 @@ function run_convergence() {
             sync_debug_log("tick", {
                 name: entry.name,
                 behind: Number(behind.toFixed(3)),
+                behindRaw: Number(behind_raw.toFixed(3)),
                 target: target_pdt,
                 edgeGap: entry.edge_pdt === null ? null : Number(((Date.now() - entry.edge_pdt) / 1000).toFixed(3)),
                 holdback: entry.holdback_seconds,
