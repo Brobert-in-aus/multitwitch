@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "120";
+var APP_VERSION = "121";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -4485,7 +4485,7 @@ function index_live_streams(live) {
     var indexed = {};
     for (var i = 0; i < (live || []).length; i++) {
         if (live[i].user_login) {
-            indexed[live[i].user_login] = live[i];
+            indexed[live[i].user_login.toLowerCase()] = live[i];
         }
     }
     return indexed;
@@ -4574,7 +4574,9 @@ function load_followed_live_streams() {
     twitch_api("followed-streams", {first: 100}, function(data) {
         var live = data.data || [];
         for (var i = 0; i < live.length; i++) {
-            twitch_live_channels[live[i].user_login] = live[i];
+            if (live[i].user_login) {
+                twitch_live_channels[live[i].user_login.toLowerCase()] = live[i];
+            }
         }
         cache_stream_metadata(live);
         render_followed_channels();
@@ -4600,14 +4602,16 @@ function render_followed_channels() {
     }
     var channels = followed_channels.slice(0);
     channels.sort(function(a, b) {
-        var a_live = twitch_live_channels[a.broadcaster_login] ? 1 : 0;
-        var b_live = twitch_live_channels[b.broadcaster_login] ? 1 : 0;
+        var a_stream = followed_live_stream(a.broadcaster_login);
+        var b_stream = followed_live_stream(b.broadcaster_login);
+        var a_live = a_stream ? 1 : 0;
+        var b_live = b_stream ? 1 : 0;
         if (a_live != b_live) {
             return b_live - a_live;
         }
         if (sort_mode === "views" && a_live && b_live) {
-            var a_viewers = Number(twitch_live_channels[a.broadcaster_login].viewers || 0);
-            var b_viewers = Number(twitch_live_channels[b.broadcaster_login].viewers || 0);
+            var a_viewers = stream_viewer_count(a_stream);
+            var b_viewers = stream_viewer_count(b_stream);
             if (a_viewers != b_viewers) {
                 return b_viewers - a_viewers;
             }
@@ -4623,10 +4627,10 @@ function render_followed_channels() {
             continue;
         }
         shown++;
-        var live = twitch_live_channels[login];
+        var live = followed_live_stream(login);
         var in_lineup = streams.indexOf(login) != -1;
         var title = follow_stream_title(login, live);
-        var viewers = live ? format_viewer_count(live.viewers) : "";
+        var viewers = live ? format_viewer_count(stream_viewer_count(live)) : "";
         var meta = in_lineup ? "Added" : (live ? "Live" : "Followed");
         var stats = $("<span>", {"class": "follow_stats"})
             .append($("<span>", {"class": "follow_viewers"}).text(viewers))
@@ -4662,6 +4666,11 @@ function render_followed_channels() {
     }
 }
 
+function followed_live_stream(login) {
+    var key = String(login || "").toLowerCase();
+    return twitch_live_channels[key] || twitch_live_channels[login] || null;
+}
+
 function follow_stream_title(login, live) {
     var key = String(login || "").toLowerCase();
     var metadata = stream_metadata[key] || {};
@@ -4669,6 +4678,13 @@ function follow_stream_title(login, live) {
         metadata.title ||
         metadata.game_name ||
         "";
+}
+
+function stream_viewer_count(stream) {
+    if (!stream) {
+        return 0;
+    }
+    return Number(stream.viewer_count || stream.viewers || 0) || 0;
 }
 
 function format_viewer_count(count) {

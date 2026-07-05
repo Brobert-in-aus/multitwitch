@@ -1487,6 +1487,23 @@ test("followed stream rows format viewer counts like Twitch", () => {
     assert.equal(context.format_viewer_count(null), "");
 });
 
+test("followed stream viewer count reads Twitch Helix viewer_count", () => {
+    const {context} = loadApplication();
+
+    assert.equal(context.stream_viewer_count({viewer_count: 5700}), 5700);
+    assert.equal(context.stream_viewer_count({viewers: 307}), 307);
+    assert.equal(context.stream_viewer_count(null), 0);
+});
+
+test("followed live stream lookup is case-insensitive", () => {
+    const {context} = loadApplication();
+
+    context.twitch_live_channels.esfandtv = {user_login: "EsfandTV", viewer_count: 5700};
+
+    assert.equal(context.followed_live_stream("EsfandTV").viewer_count, 5700);
+    assert.equal(context.followed_live_stream("esfandtv").viewer_count, 5700);
+});
+
 test("followed stream title prefers live title and falls back to cached metadata", () => {
     const {context} = loadApplication();
 
