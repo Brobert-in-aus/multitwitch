@@ -533,6 +533,71 @@ test("a single-tick behind spike is slew-limited and does not seek", () => {
 });
 
 
+// Progress-deficit gate: a `behind` excursion is only acted on when the playhead
+// actually fell short of wall-clock. These two share a fixture that differs only
+// in whether currentTime advanced between ticks.
+function deficitFixture(base, currentTime, playingOffsetMs) {
+    return {
+        engine: "hls",
+        manual_paused: false,
+        recovering: false,
+        startup_pending: false,
+        last_convergence_seek_at: 0,
+        // Pre-seed the deficit tracker one tick (1s) in the past so run_convergence
+        // measures a full-second wall interval against the currentTime we set.
+        real_lag: 0,
+        pd_last_ct: 100,
+        pd_last_at: base - 1000,
+        hls: {
+            playingDate: new Date(base + playingOffsetMs),
+            latestLevelDetails: {
+                live: true,
+                age: 0,
+                fragments: [{programDateTime: base - 2000, duration: 2}]
+            }
+        },
+        video: {
+            currentTime: currentTime,
+            playbackRate: 1,
+            paused: false,
+            seekable: {length: 1, start: () => 50, end: () => 120}
+        }
+    };
+}
+
+
+test("a PDT artifact (playhead advancing) does not nudge", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    // edge_pdt = base, holdback 6s -> target = base - 6000. playing = base - 8500
+    // -> behind = 2.5s, but the playhead advanced a full second (100 -> 101), so
+    // there is no real deficit: the offset is pure PDT jitter.
+    const player = deficitFixture(base, 101, -8500);
+    context.stream_players.artifact = player;
+
+    context.run_convergence();
+
+    assert.equal(player.video.playbackRate, 1, "no nudge without a real deficit");
+    assert.ok(Math.abs(player.real_lag) < 0.3, "deficit stays ~0 through the artifact");
+});
+
+
+test("a real stall (playhead frozen) does nudge", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    // Same 2.5s-class offset, but currentTime did not advance (100 -> 100): the
+    // playhead genuinely lost a second of wall-clock, so the gate opens.
+    const player = deficitFixture(base, 100, -8000);
+    context.stream_players.stalled = player;
+
+    context.run_convergence();
+
+    assert.ok(player.real_lag > 0.3, "the stall accumulates real lag");
+    assert.ok(player.video.playbackRate > 1 && player.video.playbackRate <= 1.15,
+        "a real deficit is corrected");
+});
+
+
 test("straggler state requires consecutive enter and exit ticks", () => {
     const {context} = loadApplication();
     const fresh = {

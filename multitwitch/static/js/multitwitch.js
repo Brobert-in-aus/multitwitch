@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "123";
+var APP_VERSION = "124";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -117,6 +117,9 @@ var CONVERGENCE_SEEK_COOLDOWN = 3000;  // ms; must exceed CONVERGENCE_INTERVAL
 // segment between playlist refreshes. Slew-limiting `behind` to this bound
 // rejects those without affecting real drift. See run_convergence.
 var CONVERGENCE_MAX_BEHIND_STEP = 1.5;
+// Upper bound (seconds) on the accumulated playhead-progress deficit, so a
+// pathological session can't let it run away. See convergence_deficit_step.
+var CONVERGENCE_DEFICIT_CLAMP = 30;
 var convergence_timer = null;
 var convergence_disabled = false;
 var stream_load_pending = {};
@@ -1671,7 +1674,10 @@ function attach_hls_stream(tile, name, video, url) {
         straggler_enter_ticks: 0,
         straggler_exit_ticks: 0,
         last_audible_play_blocked_at: 0,
-        last_convergence_seek_at: 0
+        last_convergence_seek_at: 0,
+        real_lag: 0,
+        pd_last_ct: video.currentTime || 0,
+        pd_last_at: 0
     };
     $(video).off(".playbackRecovery")
         .on("pause.playbackRecovery", function() {
@@ -2483,6 +2489,26 @@ function convergence_correction(behind, current_time, seek_start, seek_end, buff
     return {seek_to: null, playback_rate: behind > 0 ? 1 + adjust : 1 - adjust};
 }
 
+// Accumulated playhead-progress deficit: how much real (wall-clock) time the
+// playhead has failed to consume since alignment. dt_wall and dct are the
+// wall-clock and playhead (currentTime) advances since the previous tick. In
+// undisturbed 1x playback dct == dt_wall so this holds steady; only a genuine
+// interruption (stall/rebuffer) makes the playhead fall short, growing it. It
+// is therefore immune to the PDT-label jitter that moves `behind` -- during
+// that jitter the playhead keeps advancing normally, so the deficit stays flat.
+// The convergence tick gates the rate nudge on this so phantom `behind`
+// excursions don't drive needless speed-ups. Clamped so it can't run away.
+function convergence_deficit_step(prev_lag, dt_wall, dct) {
+    var next = prev_lag + (dt_wall - dct);
+    if (next > CONVERGENCE_DEFICIT_CLAMP) {
+        return CONVERGENCE_DEFICIT_CLAMP;
+    }
+    if (next < -CONVERGENCE_DEFICIT_CLAMP) {
+        return -CONVERGENCE_DEFICIT_CLAMP;
+    }
+    return next;
+}
+
 // Seconds of media buffered ahead of the playhead, or null when unknowable.
 function player_buffered_ahead(video) {
     try {
@@ -2949,21 +2975,63 @@ function run_convergence() {
             }
             entry.player.last_behind = behind;
             entry.player.last_behind_at = now;
+
+            // Progress-deficit gate. A stream at steady state tracks the wall at
+            // 1x and only drifts when playback is interrupted, so every `behind`
+            // excursion that isn't backed by the playhead actually falling short
+            // of wall-clock is PDT-label noise. Integrate that shortfall (immune
+            // to the noise, since the playhead keeps advancing through it) and
+            // let it, not `behind` alone, decide whether to *nudge*.
+            var ct = video.currentTime || 0;
+            var pd_at = entry.player.pd_last_at || 0;
+            var dt_wall = (now - pd_at) / 1000;
+            if (!pd_at || dt_wall > CONVERGENCE_INTERVAL * 2 / 1000) {
+                // First sighting or a gap in ticks (e.g. backgrounded tab): we
+                // can't measure a deficit across the gap, so trust the current
+                // PDT `behind` as the lag to recover and integrate from here.
+                entry.player.real_lag = behind;
+            } else if (dt_wall > 0.1) {
+                var dct = ct - (entry.player.pd_last_ct || 0);
+                // A backward jump is a seek we (or the user) made, not a stall.
+                if (dct > -0.5) {
+                    entry.player.real_lag = convergence_deficit_step(
+                        entry.player.real_lag || 0, dt_wall, dct);
+                }
+            }
+            entry.player.pd_last_ct = ct;
+            entry.player.pd_last_at = now;
+            // Converged per the PDT signal -> aligned; clear the accumulator so
+            // integration error can't build up over a long session.
+            if (Math.abs(behind) < CONVERGENCE_DEADBAND) {
+                entry.player.real_lag = 0;
+            }
+            var real_lag = entry.player.real_lag || 0;
+
             var bounds = player_seek_bounds(entry.player);
             if (!bounds) {
                 continue;
             }
-            var correction = convergence_correction(behind, video.currentTime || 0,
+            var correction = convergence_correction(behind, ct,
                 bounds.start, bounds.end, player_buffered_ahead(video), entry.min_buffer_seconds);
             if (correction.seek_to !== null) {
+                // Seek path stays ungated: PDT artifacts never reach the seek
+                // threshold, and large realignments (tab return, straggler
+                // recovery) must snap promptly even when no deficit was measured.
                 video.playbackRate = 1;
                 if (now - (entry.player.last_convergence_seek_at || 0) >= CONVERGENCE_SEEK_COOLDOWN) {
                     video.currentTime = correction.seek_to;
                     entry.player.last_convergence_seek_at = now;
                     // The playhead just moved; the next tick's `behind` reflects
-                    // a new position, so don't slew-limit against the old one.
+                    // a new position, so don't slew-limit against the old one,
+                    // and re-baseline the deficit tracker to the new position.
                     entry.player.last_behind = null;
+                    entry.player.real_lag = 0;
+                    entry.player.pd_last_ct = correction.seek_to;
                 }
+            } else if (correction.playback_rate !== 1 && Math.abs(real_lag) < CONVERGENCE_DEADBAND) {
+                // A nudge with no real playhead deficit behind it is chasing a
+                // PDT phantom -> hold 1x.
+                video.playbackRate = 1;
             } else {
                 video.playbackRate = correction.playback_rate;
             }
@@ -2971,6 +3039,7 @@ function run_convergence() {
                 name: entry.name,
                 behind: Number(behind.toFixed(3)),
                 behindRaw: Number(behind_raw.toFixed(3)),
+                realLag: Number(real_lag.toFixed(3)),
                 target: target_pdt,
                 edgeGap: entry.edge_pdt === null ? null : Number(((Date.now() - entry.edge_pdt) / 1000).toFixed(3)),
                 holdback: entry.holdback_seconds,
