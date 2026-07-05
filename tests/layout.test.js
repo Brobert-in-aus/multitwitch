@@ -830,6 +830,75 @@ test("startup sync aligns initial players to a shared startup wall", () => {
 });
 
 
+test("startup sync starts hls loading at the coordinated media position", () => {
+    const {context} = loadApplication();
+    const base = Date.now() - 10000;
+    const played = [];
+    context.play_stream_with_target_audio = (name, video) => {
+        played.push(name);
+        video.paused = false;
+    };
+    context.streams = ["fast", "slow"];
+    context.stream_load_pending.slow = true;
+
+    function addPlayer(name) {
+        const hls = {
+            config: {liveSyncDuration: 8},
+            startLoads: [],
+            stopLoads: 0,
+            startLoad(position) {
+                this.startLoads.push(position);
+            },
+            stopLoad() {
+                this.stopLoads += 1;
+            }
+        };
+        const video = {
+            paused: true,
+            currentTime: 100,
+            buffered: {length: 1, start: () => 100, end: () => 105},
+            seekable: {length: 1, start: () => 80, end: () => 120}
+        };
+        context.stream_players[name] = {
+            name,
+            engine: "hls",
+            startup_pending: true,
+            startup_sync_released: false,
+            manual_paused: false,
+            hls,
+            video
+        };
+        return hls;
+    }
+    function details(edgeOffsetMs) {
+        return {
+            live: true,
+            age: 1,
+            edge: 120,
+            totalduration: 40,
+            fragments: [{programDateTime: base + edgeOffsetMs - 2000, duration: 2}]
+        };
+    }
+
+    const fast = addPlayer("fast");
+    const slow = addPlayer("slow");
+
+    context.coordinate_startup_toward_wall("fast", fast, details(4000));
+    assert.deepEqual(fast.startLoads, []);
+
+    context.stream_load_pending.slow = false;
+    context.coordinate_startup_toward_wall("slow", slow, details(0));
+
+    assert.deepEqual(played.sort(), ["fast", "slow"]);
+    assert.equal(fast.stopLoads, 1);
+    assert.equal(slow.stopLoads, 1);
+    assert.ok(Math.abs(fast.config.liveSyncDuration - 10) < 0.05);
+    assert.ok(Math.abs(fast.startLoads[0] - 111) < 0.05);
+    assert.ok(Math.abs(slow.config.liveSyncDuration - 6) < 0.05);
+    assert.ok(Math.abs(slow.startLoads[0] - 115) < 0.05);
+});
+
+
 test("startup sync waits for buffer before starting on the stable wall", () => {
     const {context} = loadApplication();
     const base = Date.now() - 1000;

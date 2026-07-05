@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "116";
+var APP_VERSION = "117";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1635,6 +1635,7 @@ function attach_hls_stream(tile, name, video, url) {
         startup_sync_ready: false,
         startup_sync_released: false,
         startup_sync_details: null,
+        startup_sync_start_position: null,
         is_straggler: false,
         straggler_enter_ticks: 0,
         straggler_exit_ticks: 0,
@@ -2636,9 +2637,76 @@ function release_startup_player(player) {
         return;
     }
     player.startup_sync_released = true;
+    apply_startup_start_position(player);
     if (player.hls && player.video) {
         retry_hls_startup_play(player.name, player.hls, player.video);
     }
+}
+
+function startup_start_position(details, live_sync_duration) {
+    if (!details || typeof details.edge !== "number" || !isFinite(details.edge) ||
+        typeof live_sync_duration !== "number" || !isFinite(live_sync_duration)) {
+        return null;
+    }
+    var age = typeof details.age === "number" && isFinite(details.age) ? Math.max(0, details.age) : 0;
+    var start = details.edge + age - live_sync_duration;
+    var lower = 0;
+    if (typeof details.totalduration === "number" && isFinite(details.totalduration) && details.totalduration > 0) {
+        lower = Math.max(0, details.edge - details.totalduration);
+    }
+    var upper = Math.max(lower, details.edge);
+    return Math.max(lower, Math.min(upper, start));
+}
+
+function remember_startup_start_position(player, details) {
+    if (!player || !player.hls || !player.hls.config) {
+        return;
+    }
+    player.startup_sync_start_position = startup_start_position(details, player.hls.config.liveSyncDuration);
+}
+
+function seek_video_to_start_position(video, start_position) {
+    if (!video || typeof start_position !== "number" || !isFinite(start_position)) {
+        return;
+    }
+    try {
+        var seekable = video.seekable;
+        if (!seekable || !seekable.length) {
+            return;
+        }
+        for (var i = 0; i < seekable.length; i++) {
+            if (seekable.start(i) <= start_position && start_position <= seekable.end(i)) {
+                if (Math.abs((video.currentTime || 0) - start_position) > 0.25) {
+                    video.currentTime = start_position;
+                }
+                return;
+            }
+        }
+    } catch (e) {}
+}
+
+function apply_startup_start_position(player) {
+    if (!player || !player.hls) {
+        return;
+    }
+    var start_position = player.startup_sync_start_position;
+    if (typeof start_position !== "number" || !isFinite(start_position)) {
+        return;
+    }
+    try {
+        if (typeof player.hls.stopLoad === "function") {
+            player.hls.stopLoad();
+        }
+        if (typeof player.hls.startLoad === "function") {
+            player.hls.startLoad(start_position);
+        }
+    } catch (e) {}
+    seek_video_to_start_position(player.video, start_position);
+    sync_debug_log("startup-start", {
+        name: player.name,
+        position: Number(start_position.toFixed(3)),
+        liveSyncDuration: player.hls.config && player.hls.config.liveSyncDuration
+    });
 }
 
 function startup_entry_buffer_ready(entry) {
@@ -2682,6 +2750,7 @@ function release_startup_sync_players(entries, use_startup_fallback) {
                 );
             }
         }
+        remember_startup_start_position(entry.player, entry.details);
         release_startup_player(entry.player);
     }
     if (startup_sync_timer && !startup_sync_ready_players().length) {
@@ -2733,10 +2802,9 @@ function coordinate_startup_toward_wall(name, hls, details) {
 // Born converged: hls.js starts a fresh stream CONVERGENCE_HOLDBACK behind its
 // own edge, but the shared wall may sit further back (a slower channel anchors
 // the group), which would leave the newcomer ahead of the wall, drifting back
-// at 0.95x for a minute. Raise this instance's hold-back so playback lands on
-// the wall directly. hls.js reads liveSyncDuration lazily when it picks the
-// live start position, so mutating it in the LEVEL_LOADED handler -- before
-// the first buffering tick -- is honored.
+// at 0.95x for a minute. Raise this instance's hold-back and remember the
+// matching media timeline position so release can actively restart loading
+// there instead of merely delaying play() after hls.js has picked a fragment.
 function bias_startup_toward_wall(name, hls, details) {
     var player = stream_players[name];
     if (!player || player.hls !== hls || !player.startup_pending || !hls.config) {
@@ -2751,6 +2819,7 @@ function bias_startup_toward_wall(name, hls, details) {
     var startup_latency = details_startup_latency_seconds(details);
     if (target_pdt === null) {
         hls.config.liveSyncDuration = startup_latency;
+        remember_startup_start_position(player, details);
         return;
     }
     var desired = (edge_pdt - target_pdt) / 1000;
@@ -2761,6 +2830,7 @@ function bias_startup_toward_wall(name, hls, details) {
     // never chase a stalled group further back than the straggler limit.
     hls.config.liveSyncDuration = Math.max(startup_latency,
         Math.min(details_holdback_seconds(details) + CONVERGENCE_STRAGGLER_LIMIT, desired));
+    remember_startup_start_position(player, details);
 }
 
 function run_convergence() {
