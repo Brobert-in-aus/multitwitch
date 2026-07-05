@@ -1,0 +1,57 @@
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>{{ project }} · Usage · Sign in</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  :root {
+    --bg: #0f1216; --panel: #181d24; --panel-2: #1f262f; --border: #2a323d;
+    --text: #e6eaef; --muted: #93a1b1; --accent: #a970ff; --accent-2: #4f8cff; --bad: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .card {
+    width: 320px; max-width: calc(100vw - 32px);
+    background: var(--panel); border: 1px solid var(--border); border-radius: 14px;
+    padding: 28px 26px; box-shadow: 0 12px 40px rgba(0,0,0,.35);
+  }
+  h1 { font-size: 17px; margin: 0 0 4px; font-weight: 650; }
+  h1 .mark { color: var(--accent); }
+  .sub { color: var(--muted); font-size: 12px; margin-bottom: 20px; }
+  label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+  input[type="password"] {
+    width: 100%; background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 9px; padding: 10px 12px; font: inherit;
+  }
+  input[type="password"]:focus { outline: none; border-color: var(--accent-2); }
+  button {
+    width: 100%; margin-top: 16px; cursor: pointer;
+    background: var(--accent); border: 1px solid var(--accent); color: #12040f;
+    border-radius: 9px; padding: 10px 12px; font: inherit; font-weight: 650;
+  }
+  button:hover { filter: brightness(1.05); }
+  .error {
+    margin-top: 14px; color: var(--bad); font-size: 13px;
+    background: rgba(255,107,107,.08); border: 1px solid rgba(255,107,107,.3);
+    border-radius: 8px; padding: 8px 10px;
+  }
+</style>
+</head>
+<body>
+  <form class="card" method="POST" action="/admin/login">
+    <h1><span class="mark">{{ project }}</span> · Usage</h1>
+    <div class="sub">Sign in to view usage analytics.</div>
+    <label for="password">Password</label>
+    <input type="password" id="password" name="password" autocomplete="current-password" autofocus />
+    {% if error %}<div class="error">{{ error }}</div>{% endif %}
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>

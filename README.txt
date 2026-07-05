@@ -262,6 +262,33 @@ turns the endpoint into a no-op that still returns 204. Set
 ANALYTICS_RETENTION_DAYS to control daily log pruning; production defaults to
 30 days.
 
+Viewing usage
+~~~~~~~~~~~~~
+
+Two ways to read the collected events, both driven by the same aggregation code
+(multitwitch/lib/usage_report.py):
+
+  * CLI report. Point scripts/usage_report.py at the log-file stem (it expands
+    to every dated `-YYYY-MM-DD.jsonl` sibling), a directory, explicit files, or
+    stdin. Supports --since/--until (inclusive UTC dates) and --json:
+
+        python scripts/usage_report.py /app/data/usage-events.jsonl
+        python scripts/usage_report.py /app/data/ --since 2026-06-01 --json
+
+  * Web dashboard at /admin/usage, behind a single-admin password login.
+    Disabled (returns 404) unless ANALYTICS_DASHBOARD_PASSWORD_HASH is set.
+    Generate the hash and add it to /etc/multistream.env on the VPS (not
+    docker-compose.yml -- it is a secret):
+
+        python scripts/hash_dashboard_password.py
+        # prints: ANALYTICS_DASHBOARD_PASSWORD_HASH=pbkdf2_sha256$...
+
+    Then visit https://<host>/admin/usage and sign in. Login sets an httpOnly,
+    SameSite=Lax, Secure session cookie (30-day expiry, signed with a key derived
+    from the hash, so changing the password invalidates existing sessions).
+    Attempts are rate-limited. The plaintext password is never stored. The
+    dashboard reads the same ANALYTICS_LOG_FILE logs and has From/To date filters.
+
 Production operations
 ~~~~~~~~~~~~~~~~~~~~~
 

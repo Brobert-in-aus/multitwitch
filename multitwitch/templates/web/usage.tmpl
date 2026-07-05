@@ -1,0 +1,318 @@
+<!DOCTYPE HTML>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>{{ project }} · Usage</title>
+<link rel="icon" href="/favicon.ico" />
+<style>
+  :root {
+    --bg: #0f1216;
+    --panel: #181d24;
+    --panel-2: #1f262f;
+    --border: #2a323d;
+    --text: #e6eaef;
+    --muted: #93a1b1;
+    --accent: #a970ff;
+    --accent-2: #4f8cff;
+    --good: #46c98b;
+    --bad: #ff6b6b;
+    --track: #232b35;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  header {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+  header h1 { font-size: 18px; margin: 0; font-weight: 650; }
+  header h1 .mark { color: var(--accent); }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-left: auto; }
+  .controls label { color: var(--muted); font-size: 12px; }
+  input[type="date"], select, button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font: inherit;
+  }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #12040f; font-weight: 600; }
+  button:hover { border-color: var(--accent-2); }
+  main { padding: 24px; max-width: 1100px; margin: 0 auto; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 24px; }
+  .card { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .value { font-size: 26px; font-weight: 700; margin-top: 4px; }
+  .card .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  section { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 18px 20px; margin-bottom: 20px; }
+  section h2 { font-size: 14px; margin: 0 0 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .grid-2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 6px 8px; border-bottom: 1px solid var(--border); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .row { display: grid; grid-template-columns: 90px 1fr 96px; gap: 10px; align-items: center; margin: 7px 0; }
+  .row .name { color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .track { background: var(--track); border-radius: 6px; height: 14px; overflow: hidden; }
+  .fill { height: 100%; background: linear-gradient(90deg, var(--accent-2), var(--accent)); border-radius: 6px; }
+  .row .amt { color: var(--muted); font-size: 12px; text-align: right; font-variant-numeric: tabular-nums; }
+  .prefs { display: flex; flex-wrap: wrap; gap: 22px; }
+  .pref { min-width: 120px; }
+  .pref .p { font-size: 22px; font-weight: 700; }
+  .pref .l { color: var(--muted); font-size: 12px; }
+  .muted { color: var(--muted); }
+  .empty { color: var(--muted); padding: 8px; }
+  #status { color: var(--muted); font-size: 12px; }
+  #error { color: var(--bad); font-size: 13px; margin-bottom: 16px; display: none; }
+  .files { color: var(--muted); font-size: 12px; margin-top: 6px; }
+</style>
+</head>
+<body>
+<header>
+  <h1><span class="mark">{{ project }}</span> · Usage</h1>
+  <div class="controls">
+    <label>From <input type="date" id="since" /></label>
+    <label>To <input type="date" id="until" /></label>
+    <button id="clear">Clear</button>
+    <button id="refresh" class="primary">Refresh</button>
+    <form method="POST" action="/admin/logout" style="margin:0"><button type="submit">Sign out</button></form>
+    <span id="status"></span>
+  </div>
+</header>
+<main>
+  <div id="error"></div>
+
+  <div class="cards" id="cards"></div>
+
+  <section>
+    <h2>Daily activity</h2>
+    <table id="daily"><thead><tr>
+      <th>Date</th><th class="num">Views</th><th class="num">Added</th><th class="num">Errors</th><th style="width:40%"></th>
+    </tr></thead><tbody></tbody></table>
+  </section>
+
+  <div class="grid-2">
+    <section>
+      <h2>Events by type</h2>
+      <div id="events"></div>
+    </section>
+    <section>
+      <h2>Streams open (at load)</h2>
+      <div id="streams"></div>
+    </section>
+    <section>
+      <h2>Viewport width</h2>
+      <div id="viewports"></div>
+    </section>
+    <section>
+      <h2>Screen size</h2>
+      <div id="screens"></div>
+    </section>
+    <section>
+      <h2>Layout mode</h2>
+      <div id="layouts"></div>
+    </section>
+    <section>
+      <h2>UI preferences <span class="muted">(share of loads)</span></h2>
+      <div class="prefs" id="prefs"></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section>
+      <h2>Client errors · by kind</h2>
+      <div id="error_kinds"></div>
+    </section>
+    <section>
+      <h2>Client errors · by area</h2>
+      <div id="error_areas"></div>
+    </section>
+  </div>
+
+  <p class="files" id="files"></p>
+</main>
+
+<script>
+var VIEWPORT_ORDER = ["xs", "sm", "md", "lg", "xl"];
+var SCREEN_ORDER = ["small", "medium", "large"];
+
+function el(tag, attrs, children) {
+  var node = document.createElement(tag);
+  attrs = attrs || {};
+  for (var k in attrs) { if (attrs.hasOwnProperty(k)) node.setAttribute(k, attrs[k]); }
+  (children || []).forEach(function(c) {
+    node.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
+  });
+  return node;
+}
+
+function sum(obj) {
+  var t = 0;
+  for (var k in obj) { if (obj.hasOwnProperty(k)) t += obj[k]; }
+  return t;
+}
+
+function pct(part, whole) { return whole ? (100 * part / whole) : 0; }
+
+function entries(obj, order) {
+  var out = [];
+  var used = {};
+  (order || []).forEach(function(k) {
+    if (obj[k]) { out.push([k, obj[k]]); used[k] = true; }
+  });
+  var rest = [];
+  for (var k in obj) {
+    if (obj.hasOwnProperty(k) && !used[k]) rest.push([k, obj[k]]);
+  }
+  rest.sort(function(a, b) { return b[1] - a[1]; });
+  return out.concat(rest);
+}
+
+function renderBars(containerId, obj, order) {
+  var host = document.getElementById(containerId);
+  host.innerHTML = "";
+  var items = entries(obj, order);
+  var total = sum(obj);
+  if (!items.length) { host.appendChild(el("div", {"class": "empty"}, ["No data"])); return; }
+  var max = items[0][1];
+  items.forEach(function(pair) {
+    var name = pair[0], count = pair[1];
+    var fill = el("div", {"class": "fill", "style": "width:" + (max ? (100 * count / max) : 0) + "%"});
+    var track = el("div", {"class": "track"}, [fill]);
+    var amt = el("div", {"class": "amt"}, [String(count) + "  " + pct(count, total).toFixed(1) + "%"]);
+    host.appendChild(el("div", {"class": "row"}, [el("div", {"class": "name", "title": name}, [name]), track, amt]));
+  });
+}
+
+function card(label, value, sub) {
+  return el("div", {"class": "card"}, [
+    el("div", {"class": "label"}, [label]),
+    el("div", {"class": "value"}, [value]),
+    el("div", {"class": "sub"}, [sub || ""])
+  ]);
+}
+
+function render(data) {
+  var totals = data.totals || {};
+  var days = data.days || [];
+  var totalEvents = sum(totals);
+  var views = totals.page_view || 0;
+  var errors = totals.client_error || 0;
+
+  var cards = document.getElementById("cards");
+  cards.innerHTML = "";
+  var range = days.length ? (days[0] + " → " + days[days.length - 1]) : "no data";
+  cards.appendChild(card("Page views", views.toLocaleString(),
+    days.length ? (views / days.length).toFixed(1) + " / day" : ""));
+  cards.appendChild(card("Total events", totalEvents.toLocaleString(), range));
+  cards.appendChild(card("Days with data", String(days.length), ""));
+  cards.appendChild(card("Client errors", errors.toLocaleString(),
+    pct(errors, views).toFixed(1) + " per 100 views"));
+
+  // Daily activity
+  var body = document.querySelector("#daily tbody");
+  body.innerHTML = "";
+  var maxViews = 0;
+  days.forEach(function(d) { maxViews = Math.max(maxViews, (data.per_day[d] || {}).page_view || 0); });
+  if (!days.length) {
+    body.appendChild(el("tr", {}, [el("td", {"colspan": "5", "class": "empty"}, ["No data in range"])]));
+  }
+  days.forEach(function(d) {
+    var day = data.per_day[d] || {};
+    var v = day.page_view || 0, a = day.stream_added || 0, e = day.client_error || 0;
+    var fill = el("div", {"class": "fill", "style": "width:" + (maxViews ? (100 * v / maxViews) : 0) + "%"});
+    body.appendChild(el("tr", {}, [
+      el("td", {}, [d]),
+      el("td", {"class": "num"}, [String(v)]),
+      el("td", {"class": "num"}, [String(a)]),
+      el("td", {"class": "num"}, [String(e)]),
+      el("td", {}, [el("div", {"class": "track"}, [fill])])
+    ]));
+  });
+
+  renderBars("events", totals, null);
+  renderBars("streams", data.stream_counts || {},
+    Object.keys(data.stream_counts || {}).sort(function(a, b) { return a - b; }));
+  renderBars("viewports", data.viewports || {}, VIEWPORT_ORDER);
+  renderBars("screens", data.screens || {}, SCREEN_ORDER);
+  renderBars("layouts", data.layouts || {}, null);
+  renderBars("error_kinds", data.error_kinds || {}, null);
+  renderBars("error_areas", data.error_areas || {}, null);
+
+  // UI preferences: value keyed as "True"/"False" from Python.
+  function share(obj) {
+    var t = ((obj || {})["True"]) || 0;
+    return pct(t, views).toFixed(1) + "%";
+  }
+  var prefs = document.getElementById("prefs");
+  prefs.innerHTML = "";
+  [["Dark mode", data.darkmode], ["Theater mode", data.theater], ["Chat hidden", data.chat_hidden]]
+    .forEach(function(p) {
+      prefs.appendChild(el("div", {"class": "pref"}, [
+        el("div", {"class": "p"}, [share(p[1])]),
+        el("div", {"class": "l"}, [p[0]])
+      ]));
+    });
+
+  var files = document.getElementById("files");
+  if (!data.configured) {
+    files.textContent = "No analytics log file configured (set ANALYTICS_LOG_FILE).";
+  } else {
+    files.textContent = "Read from " + data.file_count + " daily log file" + (data.file_count === 1 ? "" : "s") + ".";
+  }
+}
+
+function load() {
+  var status = document.getElementById("status");
+  var errBox = document.getElementById("error");
+  errBox.style.display = "none";
+  status.textContent = "Loading…";
+  var params = [];
+  var since = document.getElementById("since").value;
+  var until = document.getElementById("until").value;
+  if (since) params.push("since=" + encodeURIComponent(since));
+  if (until) params.push("until=" + encodeURIComponent(until));
+  var url = "/api/usage-data" + (params.length ? "?" + params.join("&") : "");
+  fetch(url, { cache: "no-store", credentials: "same-origin" })
+    .then(function(r) {
+      // Session expired or signed out in another tab: bounce back to login.
+      if (r.status === 401) { window.location.href = "/admin/login"; throw new Error("not signed in"); }
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      return r.json();
+    })
+    .then(function(data) { render(data); status.textContent = "Updated " + new Date().toLocaleTimeString(); })
+    .catch(function(e) {
+      status.textContent = "";
+      errBox.textContent = "Could not load usage data: " + e.message;
+      errBox.style.display = "block";
+    });
+}
+
+document.getElementById("refresh").addEventListener("click", load);
+document.getElementById("clear").addEventListener("click", function() {
+  document.getElementById("since").value = "";
+  document.getElementById("until").value = "";
+  load();
+});
+document.getElementById("since").addEventListener("change", load);
+document.getElementById("until").addEventListener("change", load);
+load();
+</script>
+</body>
+</html>

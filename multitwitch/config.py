@@ -1,6 +1,7 @@
 from multitwitch.views.web import WebView
 from multitwitch.views import direct
 from multitwitch.views import analytics
+from multitwitch.views import usage
 from multitwitch.views import feedback
 from multitwitch.views import twitch
 
@@ -50,6 +51,15 @@ def routes(config):
 
     config.add_route('analytics', '/api/events')
     config.add_view(analytics.record, route_name='analytics', request_method='POST')
+
+    config.add_route('usage_dashboard', '/admin/usage')
+    config.add_view(usage.dashboard, route_name='usage_dashboard', request_method='GET')
+    config.add_route('usage_login', '/admin/login')
+    config.add_view(usage.login, route_name='usage_login', request_method=('GET', 'POST'))
+    config.add_route('usage_logout', '/admin/logout')
+    config.add_view(usage.logout, route_name='usage_logout', request_method='POST')
+    config.add_route('usage_data', '/api/usage-data')
+    config.add_view(usage.data, route_name='usage_data', request_method='GET')
 
     config.add_route('root', '*streams')
     config.add_view(WebView.home, route_name='root')
