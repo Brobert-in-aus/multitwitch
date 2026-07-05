@@ -135,6 +135,14 @@ def summarize(events):
     chat_hidden = Counter()
     error_kinds = Counter()
     error_areas = Counter()
+    countries = Counter()
+    browsers = Counter()
+    oses = Counter()
+    languages = Counter()
+    timezones = Counter()
+    # Repeat-visitor tracking: which distinct days each pseudonymous visitor was
+    # seen on. A visitor seen on >= 2 days is "returning".
+    visitor_days = defaultdict(set)
     days = set()
 
     for event, day in events:
@@ -144,6 +152,10 @@ def summarize(events):
             days.add(day)
             per_day[day][name] += 1
 
+        visitor = event.get('visitor')
+        if visitor and day:
+            visitor_days[visitor].add(day)
+
         if name == 'page_view':
             sc = event.get('stream_count')
             if isinstance(sc, int):
@@ -152,6 +164,11 @@ def summarize(events):
                 (event.get('viewport'), viewports),
                 (event.get('screen'), screens),
                 (event.get('layout'), layouts),
+                (event.get('country'), countries),
+                (event.get('browser'), browsers),
+                (event.get('os'), oses),
+                (event.get('language'), languages),
+                (event.get('timezone'), timezones),
             ):
                 if value:
                     counter[value] += 1
@@ -175,6 +192,13 @@ def summarize(events):
         'chat_hidden': chat_hidden,
         'error_kinds': error_kinds,
         'error_areas': error_areas,
+        'countries': countries,
+        'browsers': browsers,
+        'oses': oses,
+        'languages': languages,
+        'timezones': timezones,
+        'unique_visitors': len(visitor_days),
+        'repeat_visitors': sum(1 for seen in visitor_days.values() if len(seen) >= 2),
         'days': sorted(days),
     }
 
@@ -194,4 +218,11 @@ def to_jsonable(s):
         'chat_hidden': {str(k): v for k, v in s['chat_hidden'].items()},
         'error_kinds': dict(s['error_kinds']),
         'error_areas': dict(s['error_areas']),
+        'countries': dict(s['countries']),
+        'browsers': dict(s['browsers']),
+        'oses': dict(s['oses']),
+        'languages': dict(s['languages']),
+        'timezones': dict(s['timezones']),
+        'unique_visitors': s['unique_visitors'],
+        'repeat_visitors': s['repeat_visitors'],
     }

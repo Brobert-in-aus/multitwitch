@@ -136,6 +136,33 @@
 
   <div class="grid-2">
     <section>
+      <h2>Country</h2>
+      <div id="countries"></div>
+    </section>
+    <section>
+      <h2>Browser</h2>
+      <div id="browsers"></div>
+    </section>
+    <section>
+      <h2>Operating system</h2>
+      <div id="oses"></div>
+    </section>
+    <section>
+      <h2>Language</h2>
+      <div id="languages"></div>
+    </section>
+    <section>
+      <h2>Timezone</h2>
+      <div id="timezones"></div>
+    </section>
+    <section>
+      <h2>Repeat visitors <span class="muted">(logged-in, pseudonymous)</span></h2>
+      <div class="prefs" id="visitors"></div>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <section>
       <h2>Client errors · by kind</h2>
       <div id="error_kinds"></div>
     </section>
@@ -252,8 +279,27 @@ function render(data) {
   renderBars("viewports", data.viewports || {}, VIEWPORT_ORDER);
   renderBars("screens", data.screens || {}, SCREEN_ORDER);
   renderBars("layouts", data.layouts || {}, null);
+  renderBars("countries", data.countries || {}, null);
+  renderBars("browsers", data.browsers || {}, null);
+  renderBars("oses", data.oses || {}, null);
+  renderBars("languages", data.languages || {}, null);
+  renderBars("timezones", data.timezones || {}, null);
   renderBars("error_kinds", data.error_kinds || {}, null);
   renderBars("error_areas", data.error_areas || {}, null);
+
+  // Repeat visitors (pseudonymous, logged-in Twitch users only).
+  var uniqueVisitors = data.unique_visitors || 0;
+  var repeatVisitors = data.repeat_visitors || 0;
+  var visitors = document.getElementById("visitors");
+  visitors.innerHTML = "";
+  [["Unique", uniqueVisitors.toLocaleString()],
+   ["Returning", repeatVisitors.toLocaleString() + " (" + pct(repeatVisitors, uniqueVisitors).toFixed(0) + "%)"]]
+    .forEach(function(p) {
+      visitors.appendChild(el("div", {"class": "pref"}, [
+        el("div", {"class": "p"}, [p[1]]),
+        el("div", {"class": "l"}, [p[0]])
+      ]));
+    });
 
   // UI preferences: value keyed as "True"/"False" from Python.
   function share(obj) {

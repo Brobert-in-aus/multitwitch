@@ -9,7 +9,8 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PORT=6543 \
-    TWITCH_SESSION_DB=/app/data/multistream.sqlite3
+    TWITCH_SESSION_DB=/app/data/multistream.sqlite3 \
+    GEOIP_COUNTRY_DB=/app/geoip/country.mmdb
 
 # Litestream + the CA bundle it needs to reach B2 over TLS:
 RUN apt-get update \
@@ -21,6 +22,17 @@ RUN apt-get update \
 
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
+
+# Bake in DB-IP's free IP-to-Country Lite database (CC-BY-4.0) for country
+# geolocation. Best-effort: try the current month, then the previous month, and
+# never fail the build -- the app degrades to no-country if the DB is missing.
+RUN mkdir -p /app/geoip \
+  && ( curl -fsSL -o /tmp/country.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-$(date -u +%Y-%m).mmdb.gz" \
+       || curl -fsSL -o /tmp/country.mmdb.gz "https://download.db-ip.com/free/dbip-country-lite-$(date -u -d 'last month' +%Y-%m).mmdb.gz" ) \
+  && python -c "import gzip,shutil; shutil.copyfileobj(gzip.open('/tmp/country.mmdb.gz'), open('/app/geoip/country.mmdb','wb'))" \
+  && rm -f /tmp/country.mmdb.gz \
+  && echo "geoip country DB installed" \
+  ; true
 
 COPY . .
 # Register the egg entry point (egg:multitwitch) without re-resolving deps:

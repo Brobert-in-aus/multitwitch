@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "118";
+var APP_VERSION = "119";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -223,7 +223,8 @@ function usage_event_payload(event_name, fields) {
         theater: !!theater_mode,
         chat_hidden: !!chat_hidden,
         viewport: viewport_bucket(),
-        screen: screen_bucket()
+        screen: screen_bucket(),
+        timezone: browser_timezone()
     };
     for (var key in fields) {
         if (Object.prototype.hasOwnProperty.call(fields, key)) {
@@ -259,6 +260,14 @@ function screen_bucket() {
         return "medium";
     }
     return "large";
+}
+
+function browser_timezone() {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || "";
+    } catch (e) {
+        return "";
+    }
 }
 
 function optimize_size(n) {

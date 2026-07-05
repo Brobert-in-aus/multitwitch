@@ -249,8 +249,17 @@ Events are intentionally coarse: page views, stream count changes, layout
 changes, theatre/chat toggles, feedback opens, Twitch connect clicks, followed
 channel loads, and notification toggles. They include timestamp, host, stream
 count, layout, dark-mode/theatre/chat booleans, and viewport/screen buckets.
-They do not store IP addresses, cookies, Twitch channel names, full URLs,
-playlist URLs, signed tokens, user IDs, or Twitch auth details.
+
+Events are also enriched with coarse audience context: country (2-letter code,
+geolocated from the request IP, which is never stored), coarse browser and OS
+family, language, and browser timezone. Logged-in visitors additionally carry a
+`visitor` field -- a salted one-way hash of their Twitch user id (see
+ANALYTICS_VISITOR_SALT) used only to count returning visitors. They do not store
+IP addresses, cookies, Twitch usernames, channel names, full URLs, playlist
+URLs, signed tokens, raw user ids, or Twitch auth details.
+
+Country data uses the DB-IP IP-to-Country Lite database
+(https://db-ip.com, CC-BY-4.0), baked into the image at /app/geoip/country.mmdb.
 
 Client-side bug-like runtime errors from StreamMulti's own JavaScript are also
 logged as coarse `client_error` events. Network failures, Twitch auth failures,

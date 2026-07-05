@@ -104,6 +104,20 @@ def print_report(s):
     print_dist('Screen size', s['screens'], order=SCREEN_ORDER)
     print_dist('Layout mode', s['layouts'])
 
+    print('Audience')
+    print_dist('Country', s['countries'])
+    print_dist('Browser', s['browsers'])
+    print_dist('OS', s['oses'])
+    print_dist('Language', s['languages'])
+    print_dist('Timezone', s['timezones'])
+
+    print('Repeat visitors (logged-in Twitch users, pseudonymous)')
+    unique = s.get('unique_visitors', 0)
+    repeat = s.get('repeat_visitors', 0)
+    print('    unique visitors  : %d' % unique)
+    print('    returning (>=2 d) : %d  (%.1f%%)' % (repeat, pct(repeat, unique)))
+    print('')
+
     print('UI preferences (share of page loads)')
     pv = page_views or 1
     print('    dark mode on   : %5.1f%%' % pct(s['darkmode'].get(True, 0), pv))

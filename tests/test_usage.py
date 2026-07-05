@@ -121,6 +121,27 @@ class UsageReportTests(unittest.TestCase):
             self.assertEqual(filtered['days'], ['2026-07-05'])
             self.assertEqual(filtered['totals']['page_view'], 5)
 
+    def test_enrichment_and_repeat_visitor_aggregation(self):
+        events = [
+            {'event': 'page_view', 'ts': '2026-07-04T10:00:00Z', 'country': 'AU',
+             'browser': 'Chrome', 'os': 'Windows', 'language': 'en-au',
+             'timezone': 'Australia/Brisbane', 'visitor': 'aaaa'},
+            {'event': 'page_view', 'ts': '2026-07-05T10:00:00Z', 'country': 'AU',
+             'browser': 'Firefox', 'os': 'Linux', 'language': 'en-au', 'visitor': 'aaaa'},
+            {'event': 'page_view', 'ts': '2026-07-05T11:00:00Z', 'country': 'US',
+             'browser': 'Chrome', 'os': 'macOS', 'visitor': 'bbbb'},
+        ]
+        summary = usage_report.summarize((e, usage_report.event_day(e)) for e in events)
+        self.assertEqual(summary['countries']['AU'], 2)
+        self.assertEqual(summary['countries']['US'], 1)
+        self.assertEqual(summary['browsers']['Chrome'], 2)
+        self.assertEqual(summary['oses']['Windows'], 1)
+        self.assertEqual(summary['languages']['en-au'], 2)
+        self.assertEqual(summary['timezones']['Australia/Brisbane'], 1)
+        # 'aaaa' seen on two distinct days -> returning; 'bbbb' on one day only.
+        self.assertEqual(summary['unique_visitors'], 2)
+        self.assertEqual(summary['repeat_visitors'], 1)
+
     def test_malformed_lines_are_skipped(self):
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, 'usage-events-2026-07-04.jsonl')

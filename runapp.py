@@ -18,6 +18,9 @@ if __name__ == "__main__":
         host='0.0.0.0',
         port=port,
         trusted_proxy='*',
-        trusted_proxy_headers={'x-forwarded-proto', 'x-forwarded-host'},
+        # x-forwarded-for is trusted too so request.remote_addr is the real
+        # client IP (used only transiently for rate-limiting and country
+        # geolocation in analytics -- the IP itself is never stored).
+        trusted_proxy_headers={'x-forwarded-proto', 'x-forwarded-host', 'x-forwarded-for'},
         clear_untrusted_proxy_headers=True,
     )
