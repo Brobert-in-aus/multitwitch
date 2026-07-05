@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "117";
+var APP_VERSION = "118";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -58,6 +58,7 @@ var quality_adapt_timer = null;
 // Only re-pick quality once tiles have stopped resizing for this long, so
 // dragging the main-size slider or a window edge doesn't thrash the players.
 var QUALITY_ADAPT_DELAY = 10000;
+var QUALITY_ADAPT_STARTUP_GRACE = 30000;
 // Convergence controller (docs/obsolete-stream-sync.md): always-on steering of
 // every stream toward one shared wall-clock instant -- the slowest healthy
 // channel's live-edge program-date-time minus a safe holdback. With a single
@@ -1469,6 +1470,7 @@ function adapt_stream_qualities() {
     if (!page_active()) {
         return;
     }
+    var skipped_startup = false;
     var dpr = window.devicePixelRatio || 1;
     var only_stream = $("#streams .stream").length <= 1;
     for (var name in stream_players) {
@@ -1480,6 +1482,14 @@ function adapt_stream_qualities() {
             continue;
         }
         if (player.manual_paused || player.recovering) {
+            continue;
+        }
+        if (name === active_stream) {
+            continue;
+        }
+        if (player.startup_pending || !player.startup_completed_at ||
+            Date.now() - player.startup_completed_at < QUALITY_ADAPT_STARTUP_GRACE) {
+            skipped_startup = true;
             continue;
         }
         var tile = stream_tile_by_name(name);
@@ -1503,6 +1513,9 @@ function adapt_stream_qualities() {
         }
         stream_quality_choice[name] = target;
         load_direct_stream(tile, name, true, target);
+    }
+    if (skipped_startup) {
+        schedule_quality_adaptation();
     }
 }
 
@@ -1631,6 +1644,7 @@ function attach_hls_stream(tile, name, video, url) {
         resume_blocked: false,
         startup_pending: true,
         startup_started_at: Date.now(),
+        startup_completed_at: 0,
         startup_progress_started_at: 0,
         startup_sync_ready: false,
         startup_sync_released: false,
@@ -1863,6 +1877,7 @@ function complete_stream_startup(name, player, tile) {
         return;
     }
     player.startup_pending = false;
+    player.startup_completed_at = Date.now();
     player.stalled = false;
     clear_native_fallback_timer(player);
     set_player_status(tile, "");
@@ -2667,22 +2682,23 @@ function remember_startup_start_position(player, details) {
 
 function seek_video_to_start_position(video, start_position) {
     if (!video || typeof start_position !== "number" || !isFinite(start_position)) {
-        return;
+        return false;
     }
     try {
         var seekable = video.seekable;
         if (!seekable || !seekable.length) {
-            return;
+            return false;
         }
         for (var i = 0; i < seekable.length; i++) {
             if (seekable.start(i) <= start_position && start_position <= seekable.end(i)) {
                 if (Math.abs((video.currentTime || 0) - start_position) > 0.25) {
                     video.currentTime = start_position;
                 }
-                return;
+                return true;
             }
         }
     } catch (e) {}
+    return false;
 }
 
 function apply_startup_start_position(player) {
@@ -2693,18 +2709,18 @@ function apply_startup_start_position(player) {
     if (typeof start_position !== "number" || !isFinite(start_position)) {
         return;
     }
-    try {
-        if (typeof player.hls.stopLoad === "function") {
-            player.hls.stopLoad();
-        }
-        if (typeof player.hls.startLoad === "function") {
-            player.hls.startLoad(start_position);
-        }
-    } catch (e) {}
-    seek_video_to_start_position(player.video, start_position);
+    var seeked = seek_video_to_start_position(player.video, start_position);
+    if (!seeked) {
+        try {
+            if (typeof player.hls.startLoad === "function") {
+                player.hls.startLoad(start_position);
+            }
+        } catch (e) {}
+    }
     sync_debug_log("startup-start", {
         name: player.name,
         position: Number(start_position.toFixed(3)),
+        seeked: seeked,
         liveSyncDuration: player.hls.config && player.hls.config.liveSyncDuration
     });
 }

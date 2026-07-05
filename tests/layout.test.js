@@ -76,6 +76,42 @@ test("adaptive quality chooses the smallest rendition covering the tile", () => 
 });
 
 
+test("adaptive quality does not interrupt active audio or fresh startup streams", () => {
+    const {context} = loadApplication();
+    const reloaded = [];
+    const oldDollar = context.$;
+    context.$ = selector => {
+        if (selector === "#streams .stream") {
+            return {length: 3};
+        }
+        return oldDollar(selector);
+    };
+    context.stream_tile_by_name = () => ({hasClass: () => false});
+    context.load_direct_stream = (_tile, name, _force, quality) => {
+        reloaded.push({name, quality});
+    };
+    context.active_stream = "active";
+    const stableCompletedAt = Date.now() - context.QUALITY_ADAPT_STARTUP_GRACE - 1000;
+    const freshCompletedAt = Date.now() - 1000;
+    function player(startupCompletedAt) {
+        return {
+            video: {clientHeight: 500},
+            qualities: ["360p", "720p"],
+            quality: "best",
+            startup_pending: false,
+            startup_completed_at: startupCompletedAt
+        };
+    }
+    context.stream_players.active = player(stableCompletedAt);
+    context.stream_players.fresh = player(freshCompletedAt);
+    context.stream_players.stable = player(stableCompletedAt);
+
+    context.adapt_stream_qualities();
+
+    assert.deepEqual(reloaded, [{name: "stable", quality: "720p"}]);
+});
+
+
 test("chat width is clamped without reducing the stream area below its floor", () => {
     const {context} = loadApplication();
 
@@ -830,7 +866,7 @@ test("startup sync aligns initial players to a shared startup wall", () => {
 });
 
 
-test("startup sync starts hls loading at the coordinated media position", () => {
+test("startup sync seeks to the coordinated media position without restarting hls loading", () => {
     const {context} = loadApplication();
     const base = Date.now() - 10000;
     const played = [];
@@ -890,12 +926,57 @@ test("startup sync starts hls loading at the coordinated media position", () => 
     context.coordinate_startup_toward_wall("slow", slow, details(0));
 
     assert.deepEqual(played.sort(), ["fast", "slow"]);
-    assert.equal(fast.stopLoads, 1);
-    assert.equal(slow.stopLoads, 1);
+    assert.equal(fast.stopLoads, 0);
+    assert.equal(slow.stopLoads, 0);
     assert.ok(Math.abs(fast.config.liveSyncDuration - 10) < 0.05);
-    assert.ok(Math.abs(fast.startLoads[0] - 111) < 0.05);
+    assert.deepEqual(fast.startLoads, []);
+    assert.ok(Math.abs(context.stream_players.fast.video.currentTime - 111) < 0.05);
     assert.ok(Math.abs(slow.config.liveSyncDuration - 6) < 0.05);
-    assert.ok(Math.abs(slow.startLoads[0] - 115) < 0.05);
+    assert.deepEqual(slow.startLoads, []);
+    assert.ok(Math.abs(context.stream_players.slow.video.currentTime - 115) < 0.05);
+});
+
+
+test("startup sync asks hls to load the coordinated position only when it cannot seek there yet", () => {
+    const {context} = loadApplication();
+    let plays = 0;
+    const hls = {
+        config: {liveSyncDuration: 8},
+        startLoads: [],
+        stopLoads: 0,
+        startLoad(position) {
+            this.startLoads.push(position);
+        },
+        stopLoad() {
+            this.stopLoads += 1;
+        }
+    };
+    const video = {
+        paused: true,
+        currentTime: 20,
+        seekable: {length: 1, start: () => 0, end: () => 40}
+    };
+    context.play_stream_with_target_audio = (_name, target) => {
+        plays += 1;
+        target.paused = false;
+    };
+    context.stream_players.example = {
+        name: "example",
+        engine: "hls",
+        startup_pending: true,
+        startup_sync_released: false,
+        manual_paused: false,
+        hls,
+        video,
+        startup_sync_start_position: 60
+    };
+
+    context.release_startup_player(context.stream_players.example);
+
+    assert.equal(plays, 1);
+    assert.equal(hls.stopLoads, 0);
+    assert.deepEqual(hls.startLoads, [60]);
+    assert.equal(video.currentTime, 20);
 });
 
 
