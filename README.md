@@ -1,5 +1,4 @@
-StreamMulti
-===========
+# StreamMulti
 
 StreamMulti (live at streammulti.live) is a personal multistream control deck
 for watching several Twitch channels in one browser window. This fork plays
@@ -8,16 +7,16 @@ official video embed.
 
 Channels are encoded in the URL:
 
-    http://localhost:6543/gamesdonequick/anotherchannel
+```
+http://localhost:6543/gamesdonequick/anotherchannel
+```
 
 This repository is an independent fork of the original MultiTwitch project by
-Brian Hamrick (https://github.com/bhamrick/multitwitch) and is not intended
+Brian Hamrick (<https://github.com/bhamrick/multitwitch>) and is not intended
 to be contributed back to it. StreamMulti is released under the MIT License;
-see LICENSE and NOTICE.
+see [LICENSE](LICENSE) and [NOTICE](NOTICE).
 
-
-Current features
-----------------
+## Current features
 
 Streams and playback:
 
@@ -34,7 +33,7 @@ Streams and playback:
 * Automatic stream alignment: every stream is continuously steered toward the
   same wall-clock moment (from HLS program-date-time), a few seconds behind
   the slowest channel's live edge. Nothing to configure; may drift briefly
-  after the tab is hidden, then re-aligns on return. Disable with ?nosync=1.
+  after the tab is hidden, then re-aligns on return. Disable with `?nosync=1`.
 * Playback recovery when Chromium suspends background video, plus a distinct
   "Stream offline" state when Twitch confirms a failed channel is offline.
 * Hover overlays for stream title, channel name, and game metadata.
@@ -74,77 +73,85 @@ Stream Together depends on an undocumented Twitch endpoint used by twitch.tv.
 It is deliberately treated as a best-effort personal-use feature and may break
 if Twitch changes its private API.
 
-
-Local development
------------------
+## Local development
 
 Python 3.10 is the production baseline. On Windows PowerShell:
 
-    py -3.10 -m venv .venv
-    .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-    .\.venv\Scripts\python.exe -m pip install -e . --no-deps
-    .\.venv\Scripts\pserve.exe development.ini
+```powershell
+py -3.10 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.\.venv\Scripts\python.exe -m pip install -e . --no-deps
+.\.venv\Scripts\pserve.exe development.ini
+```
 
-Open http://localhost:6543 after the server starts.
+Open <http://localhost:6543> after the server starts.
 
 Docker is the closest match to production:
 
-    docker build -t multitwitch-local .
-    docker run --rm --name multitwitch-local --env-file multistream.env `
-      -e TWITCH_REDIRECT_URI=http://localhost:6543/auth/twitch/callback `
-      -e TWITCH_SECURE_COOKIES=0 -p 6543:6543 `
-      -v multitwitch-local-data:/app/data multitwitch-local
+```powershell
+docker build -t multitwitch-local .
+docker run --rm --name multitwitch-local --env-file multistream.env `
+  -e TWITCH_REDIRECT_URI=http://localhost:6543/auth/twitch/callback `
+  -e TWITCH_SECURE_COOKIES=0 -p 6543:6543 `
+  -v multitwitch-local-data:/app/data multitwitch-local
+```
 
-Create multistream.env first as described below, or omit `--env-file
+Create `multistream.env` first as described below, or omit `--env-file
 multistream.env` when testing without Twitch OAuth.
 
 The app works without Twitch OAuth. Direct streams, layouts, audio controls,
 chat, and theater mode remain available; followed channels and authenticated
 metadata require a Twitch connection.
 
-
-Twitch configuration
---------------------
+## Twitch configuration
 
 Register a Twitch application with this exact local OAuth redirect URL:
 
-    http://localhost:6543/auth/twitch/callback
+```
+http://localhost:6543/auth/twitch/callback
+```
 
 Twitch requires the configured callback and the application's redirect URI to
 match exactly, including hostname, port, scheme, and path.
 
-Copy multistream.env.example to a local multistream.env and configure:
+Copy `multistream.env.example` to a local `multistream.env` and configure:
 
-    TWITCH_CLIENT_ID
-    TWITCH_CLIENT_SECRET
+```
+TWITCH_CLIENT_ID
+TWITCH_CLIENT_SECRET
+```
 
 The app also accepts these optional settings through the ini file or environment:
 
-    TWITCH_REDIRECT_URI
-    TWITCH_SESSION_DB
-    TWITCH_SECURE_COOKIES
+```
+TWITCH_REDIRECT_URI
+TWITCH_SESSION_DB
+TWITCH_SECURE_COOKIES
+```
 
 The feedback form (see "Feedback form" under Deployment) needs its own two
-variables, also in multistream.env -- the form just shows "not configured"
+variables, also in `multistream.env` -- the form just shows "not configured"
 locally if you skip them:
 
-    RESEND_API_KEY
-    FEEDBACK_TO
+```
+RESEND_API_KEY
+FEEDBACK_TO
+```
 
-The real multistream.env contains credentials and is intentionally ignored by
-Git. Commit multistream.env.example only.
+The real `multistream.env` contains credentials and is intentionally ignored by
+Git. Commit `multistream.env.example` only.
 
-
-Automated checks
-----------------
+## Automated checks
 
 Run the repository checks locally with:
 
-    .\.venv\Scripts\python.exe -m unittest discover -s tests -v
-    .\.venv\Scripts\python.exe -m compileall -q multitwitch runapp.py
-    node --check multitwitch/static/js/multitwitch.js
-    node --test tests/*.test.js
-    docker compose -f deploy/docker-compose.yml config -q
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+.\.venv\Scripts\python.exe -m compileall -q multitwitch runapp.py
+node --check multitwitch/static/js/multitwitch.js
+node --test tests/*.test.js
+docker compose -f deploy/docker-compose.yml config -q
+```
 
 The GitHub test workflow runs the Python and JavaScript unit suites, syntax
 checks, and Compose validation on pushes and pull requests. Direct Twitch
@@ -152,14 +159,12 @@ playback, OAuth, browser autoplay/background suspension, chat embeds, and Stream
 Together still require browser-level smoke testing because they depend on Twitch
 and browser media policy.
 
-
-Deployment: streammulti.live
-----------------------------
+## Deployment: streammulti.live
 
 The production deployment is an independent Compose stack on the shared edge
 network, behind the VPS Caddy instance. Twitch OAuth sessions are stored in
 SQLite on a named volume. Litestream replication to Backblaze B2 is enabled
-when all five LITESTREAM_* variables are present. The VPS-side stack, the
+when all five `LITESTREAM_*` variables are present. The VPS-side stack, the
 data volume, and the GHCR image all keep the internal "multistream"/
 "multitwitch" naming -- only the public domain and on-page branding changed.
 
@@ -168,13 +173,13 @@ proxy that terminates TLS and forwards to it. In the reference deployment
 streammulti.live is production and multistream.robertmckinnon.au is kept
 running as a dev/staging site (e.g. for testing Twitch OAuth or the HLS
 proxy against a real deployed domain instead of localhost). No
-TWITCH_REDIRECT_URI is pinned in docker-compose.yml -- it's derived per-
-request from whichever domain the visitor used (multitwitch/__init__.py
-trusts the proxy's X-Forwarded-Proto/-Host; runapp.py tells Waitress to trust
-that hop since the container is never reachable except through the proxy).
+`TWITCH_REDIRECT_URI` is pinned in `docker-compose.yml` -- it's derived per-
+request from whichever domain the visitor used (`multitwitch/__init__.py`
+trusts the proxy's `X-Forwarded-Proto`/`-Host`; `runapp.py` tells Waitress to
+trust that hop since the container is never reachable except through the proxy).
 
 A second, stateless Go sidecar (hlsproxy) handles the high-frequency
-/api/hls-proxy* traffic so it isn't bound by Waitress's thread pool; the
+`/api/hls-proxy*` traffic so it isn't bound by Waitress's thread pool; the
 reverse proxy splits that one path to the sidecar while everything else still
 reaches the Pyramid app. The frontend's path contract is unchanged -- only the
 backend selection moved.
@@ -183,81 +188,91 @@ The TLS/routing layer lives outside this repository and is not required for
 local development. Any reverse proxy works; the reference deployment uses Caddy
 on a shared `edge` Docker network. An equivalent Caddyfile looks like:
 
-    streammulti.live, multistream.robertmckinnon.au {
-        # High-frequency HLS playlist traffic -> stateless Go sidecar
-        handle /api/hls-proxy* {
-            reverse_proxy hlsproxy:8080
-        }
-        # Everything else -> the Pyramid app
-        reverse_proxy multistream:6543
+```
+streammulti.live, multistream.robertmckinnon.au {
+    # High-frequency HLS playlist traffic -> stateless Go sidecar
+    handle /api/hls-proxy* {
+        reverse_proxy hlsproxy:8080
     }
+    # Everything else -> the Pyramid app
+    reverse_proxy multistream:6543
+}
+```
 
 Deployment artifacts:
 
-    Dockerfile                  Python 3.10 image with Streamlink and Litestream
-    docker/entrypoint.sh        Restores/replicates SQLite, then starts Waitress
-    litestream.yml              Backblaze B2 replication configuration
-    cmd/hlsproxy/main.go        Go HLS playlist proxy/rewriter sidecar
-    Dockerfile.hlsproxy         Image for the hlsproxy sidecar (stateless, no secrets)
-    deploy/docker-compose.yml   Production services, volume, env, and networks
-    multistream.env.example     VPS environment template (real file mode 600)
-    .github/workflows/deploy.yml  GHCR build and VPS deployment workflow
+| Path | Purpose |
+| --- | --- |
+| `Dockerfile` | Python 3.10 image with Streamlink and Litestream |
+| `docker/entrypoint.sh` | Restores/replicates SQLite, then starts Waitress |
+| `litestream.yml` | Backblaze B2 replication configuration |
+| `cmd/hlsproxy/main.go` | Go HLS playlist proxy/rewriter sidecar |
+| `Dockerfile.hlsproxy` | Image for the hlsproxy sidecar (stateless, no secrets) |
+| `deploy/docker-compose.yml` | Production services, volume, env, and networks |
+| `multistream.env.example` | VPS environment template (real file mode 600) |
+| `.github/workflows/deploy.yml` | GHCR build and VPS deployment workflow |
 
-Both the app and the sidecar expose GET /healthz for container health checks.
+Both the app and the sidecar expose `GET /healthz` for container health checks.
 
 One-time infrastructure setup:
 
 1. Point both the streammulti.live and multistream.robertmckinnon.au DNS
    records at the VPS.
-2. Configure DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, and optionally DEPLOY_PORT
-   as GitHub repository secrets.
-3. Create /etc/multistream.env on the VPS from multistream.env.example and set
-   its permissions to 600.
+2. Configure `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, and optionally
+   `DEPLOY_PORT` as GitHub repository secrets.
+3. Create `/etc/multistream.env` on the VPS from `multistream.env.example` and
+   set its permissions to 600.
 4. Register BOTH of these production Twitch redirect URLs on the same Twitch
    app (the Twitch Developer Console allows multiple redirect URLs per app):
 
-       https://streammulti.live/auth/twitch/callback
-       https://multistream.robertmckinnon.au/auth/twitch/callback
+   ```
+   https://streammulti.live/auth/twitch/callback
+   https://multistream.robertmckinnon.au/auth/twitch/callback
+   ```
 
 5. Create the shared Docker edge network if it does not already exist:
 
-       docker network create edge
+   ```
+   docker network create edge
+   ```
 
 Every push to master builds and publishes the image and updates the production
 Compose stack. The reverse-proxy TLS/routing layer (see the example Caddyfile
 above) is managed separately from this repository and must be configured once
-to point both domains at the app, with /api/hls-proxy* split to the sidecar.
+to point both domains at the app, with `/api/hls-proxy*` split to the sidecar.
 
-Feedback form
-~~~~~~~~~~~~~
+### Feedback form
 
-The "Feedback" button (multitwitch/views/feedback.py, route POST
-/api/feedback) sends via Resend's HTTP API. Set in /etc/multistream.env:
+The "Feedback" button (`multitwitch/views/feedback.py`, route
+`POST /api/feedback`) sends via Resend's HTTP API. Set in `/etc/multistream.env`:
 
-    RESEND_API_KEY   Same Resend account/API key used by other tools is fine
-                      (the robertmckinnon.au domain must be sending-verified).
-    FEEDBACK_TO       Where submissions are delivered. Required -- there is
-                      no default, so feedback silently 503s until this is set.
-    FEEDBACK_FROM     Optional; defaults to
-                      "StreamMulti Feedback <feedback@robertmckinnon.au>".
+* `RESEND_API_KEY` -- Same Resend account/API key used by other tools is fine
+  (the robertmckinnon.au domain must be sending-verified).
+* `FEEDBACK_TO` -- Where submissions are delivered. Required -- there is no
+  default, so feedback silently 503s until this is set.
+* `FEEDBACK_FROM` -- Optional; defaults to
+  `StreamMulti Feedback <feedback@robertmckinnon.au>`.
 
 The visitor's optional email (if they leave one) is set as Reply-To, not
-From, so replying in your inbox goes straight to them. feedback@robertmckinnon.au
+From, so replying in your inbox goes straight to them. `feedback@robertmckinnon.au`
 itself is never shown in the page or in any API response -- only used as the
 From address server-side. A simple per-IP cooldown (30s) and a 4000-character
 cap guard against trivial abuse; there's no CAPTCHA.
 
-Lightweight usage events
-~~~~~~~~~~~~~~~~~~~~~~~~
+### Lightweight usage events
 
-The frontend sends small first-party usage events to POST /api/events. The
+The frontend sends small first-party usage events to `POST /api/events`. The
 production Compose stack uses this base path:
 
-    /app/data/usage-events.jsonl
+```
+/app/data/usage-events.jsonl
+```
 
 The app writes daily JSONL files derived from that base path:
 
-    /app/data/usage-events-YYYY-MM-DD.jsonl
+```
+/app/data/usage-events-YYYY-MM-DD.jsonl
+```
 
 Events are intentionally coarse: page views, stream count changes, layout
 changes, theatre/chat toggles, feedback opens, Twitch connect clicks, followed
@@ -268,77 +283,81 @@ Events are also enriched with coarse audience context: country (2-letter code,
 geolocated from the request IP, which is never stored), coarse browser and OS
 family, language, and browser timezone. Logged-in visitors additionally carry a
 `visitor` field -- a salted one-way hash of their Twitch user id (see
-ANALYTICS_VISITOR_SALT) used only to count returning visitors. They do not store
-IP addresses, cookies, Twitch usernames, channel names, full URLs, playlist
-URLs, signed tokens, raw user ids, or Twitch auth details.
+`ANALYTICS_VISITOR_SALT`) used only to count returning visitors. They do not
+store IP addresses, cookies, Twitch usernames, channel names, full URLs,
+playlist URLs, signed tokens, raw user ids, or Twitch auth details.
 
 Country data uses the DB-IP IP-to-Country Lite database
-(https://db-ip.com, CC-BY-4.0), baked into the image at /app/geoip/country.mmdb.
+(<https://db-ip.com>, CC-BY-4.0), baked into the image at
+`/app/geoip/country.mmdb`.
 
 Client-side bug-like runtime errors from StreamMulti's own JavaScript are also
 logged as coarse `client_error` events. Network failures, Twitch auth failures,
 offline streams, media playback delivery issues, and third-party script/resource
 load failures are not intentionally logged as analytics errors.
 
-Set ANALYTICS_LOG_FILE to override or disable the log path. Leaving it blank
+Set `ANALYTICS_LOG_FILE` to override or disable the log path. Leaving it blank
 turns the endpoint into a no-op that still returns 204. Set
-ANALYTICS_RETENTION_DAYS to control daily log pruning; production defaults to
+`ANALYTICS_RETENTION_DAYS` to control daily log pruning; production defaults to
 30 days.
 
-Viewing usage
-~~~~~~~~~~~~~
+### Viewing usage
 
 Two ways to read the collected events, both driven by the same aggregation code
-(multitwitch/lib/usage_report.py):
+(`multitwitch/lib/usage_report.py`):
 
-  * CLI report. Point scripts/usage_report.py at the log-file stem (it expands
-    to every dated `-YYYY-MM-DD.jsonl` sibling), a directory, explicit files, or
-    stdin. Supports --since/--until (inclusive UTC dates) and --json:
+* **CLI report.** Point `scripts/usage_report.py` at the log-file stem (it
+  expands to every dated `-YYYY-MM-DD.jsonl` sibling), a directory, explicit
+  files, or stdin. Supports `--since`/`--until` (inclusive UTC dates) and
+  `--json`:
 
-        python scripts/usage_report.py /app/data/usage-events.jsonl
-        python scripts/usage_report.py /app/data/ --since 2026-06-01 --json
+  ```
+  python scripts/usage_report.py /app/data/usage-events.jsonl
+  python scripts/usage_report.py /app/data/ --since 2026-06-01 --json
+  ```
 
-  * Web dashboard at /admin/usage, behind a single-admin password login.
-    Disabled (returns 404) unless ANALYTICS_DASHBOARD_PASSWORD_HASH is set.
-    Generate the hash and add it to /etc/multistream.env on the VPS (not
-    docker-compose.yml -- it is a secret):
+* **Web dashboard** at `/admin/usage`, behind a single-admin password login.
+  Disabled (returns 404) unless `ANALYTICS_DASHBOARD_PASSWORD_HASH` is set.
+  Generate the hash and add it to `/etc/multistream.env` on the VPS (not
+  `docker-compose.yml` -- it is a secret):
 
-        python scripts/hash_dashboard_password.py
-        # prints: ANALYTICS_DASHBOARD_PASSWORD_HASH=pbkdf2_sha256$...
+  ```
+  python scripts/hash_dashboard_password.py
+  # prints: ANALYTICS_DASHBOARD_PASSWORD_HASH=pbkdf2_sha256$...
+  ```
 
-    Then visit https://<host>/admin/usage and sign in. Login sets an httpOnly,
-    SameSite=Lax, Secure session cookie (30-day expiry, signed with a key derived
-    from the hash, so changing the password invalidates existing sessions).
-    Attempts are rate-limited. The plaintext password is never stored. The
-    dashboard reads the same ANALYTICS_LOG_FILE logs and has From/To date filters.
+  Then visit `https://<host>/admin/usage` and sign in. Login sets an httpOnly,
+  SameSite=Lax, Secure session cookie (30-day expiry, signed with a key derived
+  from the hash, so changing the password invalidates existing sessions).
+  Attempts are rate-limited. The plaintext password is never stored. The
+  dashboard reads the same `ANALYTICS_LOG_FILE` logs and has From/To date filters.
 
-Production operations
-~~~~~~~~~~~~~~~~~~~~~
+### Production operations
 
 Litestream 0.5 may repeatedly log messages similar to:
 
-    timeout waiting for db initialization ... database may have corrupted
-    local state or blocked transactions; try removing -litestream directory
+```
+timeout waiting for db initialization ... database may have corrupted
+local state or blocked transactions; try removing -litestream directory
+```
 
-These warnings were observed while the application and ``/healthz`` remained
+These warnings were observed while the application and `/healthz` remained
 healthy, so they do not by themselves mean that the session database is
 unavailable. They do mean that Litestream compaction or replication health has
 not been established and should be investigated separately from application
 health. Check the container logs and confirm current snapshots in the B2
-``multistream`` replica before relying on it for recovery.
+`multistream` replica before relying on it for recovery.
 
-Do not follow Litestream's suggestion to remove its local ``-litestream`` state
+Do not follow Litestream's suggestion to remove its local `-litestream` state
 without first stopping the service, copying the named volume, and verifying the
-remote replica. The same volume contains ``multistream.sqlite3``, which stores
+remote replica. The same volume contains `multistream.sqlite3`, which stores
 Twitch OAuth sessions.
 
-The current 1 GB VPS also has a persistent 2 GB ``/swapfile`` with
-``vm.swappiness=10``. This prevents Docker image pulls from pushing the host
+The current 1 GB VPS also has a persistent 2 GB `/swapfile` with
+`vm.swappiness=10`. This prevents Docker image pulls from pushing the host
 into memory-reclaim thrashing during deployment.
 
-
-Known limitations
------------------
+## Known limitations
 
 * Chromium may suspend or destroy muted background media players when the
   window is occluded. The app attempts recovery when it becomes active again,
@@ -347,13 +366,12 @@ Known limitations
 * Twitch chat remains an official iframe embed even though video playback does
   not use the official player embed.
 
+## License
 
-License
--------
-
-StreamMulti is released under the MIT License (see LICENSE), which permits reuse
-with attribution. This project is a fork of the original MultiTwitch by Brian
-Hamrick (https://github.com/bhamrick/multitwitch), whose README grants that "the
-code of this project is free to use"; the original is credited via a link in the
-splash screen. The MIT License covers this fork's own code. Bundled third-party
-components and build-time data are listed in NOTICE.
+StreamMulti is released under the MIT License (see [LICENSE](LICENSE)), which
+permits reuse with attribution. This project is a fork of the original
+MultiTwitch by Brian Hamrick (<https://github.com/bhamrick/multitwitch>), whose
+README grants that "the code of this project is free to use"; the original is
+credited via a link in the splash screen. The MIT License covers this fork's own
+code. Bundled third-party components and build-time data are listed in
+[NOTICE](NOTICE).
