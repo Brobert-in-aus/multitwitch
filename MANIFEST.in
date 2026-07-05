@@ -1,2 +1,3 @@
-include *.txt *.ini *.cfg *.rst
-recursive-include multitwitch *.ico *.png *.css *.gif *.jpg *.pt *.txt *.mak *.mako *.js *.html *.xml
+include LICENSE NOTICE
+include *.txt *.ini *.rst
+recursive-include multitwitch *.ico *.png *.css *.gif *.jpg *.pt *.txt *.mak *.mako *.js *.html *.xml *.tmpl

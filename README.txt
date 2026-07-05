@@ -10,8 +10,10 @@ Channels are encoded in the URL:
 
     http://localhost:6543/gamesdonequick/anotherchannel
 
-The code is free to use. This repository is an independent fork and is not
-intended to be contributed back to the original MultiTwitch project.
+This repository is an independent fork of the original MultiTwitch project by
+Brian Hamrick (https://github.com/bhamrick/multitwitch) and is not intended
+to be contributed back to it. StreamMulti is released under the MIT License;
+see LICENSE and NOTICE.
 
 
 Current features
@@ -161,21 +163,34 @@ when all five LITESTREAM_* variables are present. The VPS-side stack, the
 data volume, and the GHCR image all keep the internal "multistream"/
 "multitwitch" naming -- only the public domain and on-page branding changed.
 
-The same container answers on two public domains (see
-robertmckinnon-au-hosting/caddy/Caddyfile):
-streammulti.live is production, and multistream.robertmckinnon.au is kept
+The same container can answer on multiple public domains behind a reverse
+proxy that terminates TLS and forwards to it. In the reference deployment
+streammulti.live is production and multistream.robertmckinnon.au is kept
 running as a dev/staging site (e.g. for testing Twitch OAuth or the HLS
 proxy against a real deployed domain instead of localhost). No
 TWITCH_REDIRECT_URI is pinned in docker-compose.yml -- it's derived per-
 request from whichever domain the visitor used (multitwitch/__init__.py
-trusts Caddy's X-Forwarded-Proto/-Host; runapp.py tells Waitress to trust
-that hop since the container is never reachable except through Caddy).
+trusts the proxy's X-Forwarded-Proto/-Host; runapp.py tells Waitress to trust
+that hop since the container is never reachable except through the proxy).
 
 A second, stateless Go sidecar (hlsproxy) handles the high-frequency
-/api/hls-proxy* traffic so it isn't bound by Waitress's thread pool; Caddy
-splits that one path to the sidecar while everything else still reaches the
-Pyramid app. The frontend's path contract is unchanged -- only the backend
-selection moved.
+/api/hls-proxy* traffic so it isn't bound by Waitress's thread pool; the
+reverse proxy splits that one path to the sidecar while everything else still
+reaches the Pyramid app. The frontend's path contract is unchanged -- only the
+backend selection moved.
+
+The TLS/routing layer lives outside this repository and is not required for
+local development. Any reverse proxy works; the reference deployment uses Caddy
+on a shared `edge` Docker network. An equivalent Caddyfile looks like:
+
+    streammulti.live, multistream.robertmckinnon.au {
+        # High-frequency HLS playlist traffic -> stateless Go sidecar
+        handle /api/hls-proxy* {
+            reverse_proxy hlsproxy:8080
+        }
+        # Everything else -> the Pyramid app
+        reverse_proxy multistream:6543
+    }
 
 Deployment artifacts:
 
@@ -209,10 +224,9 @@ One-time infrastructure setup:
        docker network create edge
 
 Every push to master builds and publishes the image and updates the production
-Compose stack. Shared Caddy routing is deployed only from the
-robertmckinnon-au-hosting repository, whose canonical file contains the
-streammulti.live, multistream.robertmckinnon.au, and /api/hls-proxy* ->
-hlsproxy routing.
+Compose stack. The reverse-proxy TLS/routing layer (see the example Caddyfile
+above) is managed separately from this repository and must be configured once
+to point both domains at the app, with /api/hls-proxy* split to the sidecar.
 
 Feedback form
 ~~~~~~~~~~~~~
@@ -332,3 +346,14 @@ Known limitations
 * Stream Together uses an unofficial GraphQL endpoint and is inherently fragile.
 * Twitch chat remains an official iframe embed even though video playback does
   not use the official player embed.
+
+
+License
+-------
+
+StreamMulti is released under the MIT License (see LICENSE), which permits reuse
+with attribution. This project is a fork of the original MultiTwitch by Brian
+Hamrick (https://github.com/bhamrick/multitwitch), whose README grants that "the
+code of this project is free to use"; the original is credited via a link in the
+splash screen. The MIT License covers this fork's own code. Bundled third-party
+components and build-time data are listed in NOTICE.

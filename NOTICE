@@ -1,0 +1,27 @@
+StreamMulti
+Copyright (c) 2026 Robert McKinnon
+Licensed under the MIT License (see LICENSE).
+
+This project began as a fork of the original MultiTwitch project by Brian
+Hamrick (https://github.com/bhamrick/multitwitch). That project ships no formal
+license file, but its README grants use in these words:
+
+    "The code of this project is free to use."
+
+The frontend has since been substantially rewritten (direct HLS playback via
+Streamlink and hls.js in place of the official Twitch embed, plus new layout,
+sync, chat, and Twitch-integration code). The MIT License above applies to this
+fork's own code; any surviving original portions remain used under the upstream
+grant quoted above. As a courtesy, the original project is credited via a link
+in the splash screen.
+
+Bundled third-party components:
+
+  * mustache.js -- MIT License, (c) 2009 Chris Wanstrath, (c) 2010 Jan Lehnardt.
+    See the license header in multitwitch/static/js/mustache.js.
+
+Runtime data used by the deployed image (downloaded at build time, not
+committed to this repository):
+
+  * DB-IP IP-to-Country Lite database -- CC-BY-4.0, https://db-ip.com.
+    Baked into the Docker image at /app/geoip/country.mmdb (see Dockerfile).

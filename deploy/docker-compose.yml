@@ -4,9 +4,9 @@
 # NOTE: no `ports:` — backends are never published to the host.
 #
 # hlsproxy is a stateless Go sidecar (cmd/hlsproxy) that takes over the
-# /api/hls-proxy* path from the Pyramid app. The canonical Caddy route lives in
-# robertmckinnon-au-hosting/caddy/Caddyfile. It has no session/DB dependency on
-# `multistream`, so it only joins `edge`.
+# /api/hls-proxy* path from the Pyramid app. The reverse proxy on `edge` routes
+# /api/hls-proxy* here (see the example Caddyfile in the README). It has no
+# session/DB dependency on `multistream`, so it only joins `edge`.
 
 services:
   multistream:
@@ -24,10 +24,10 @@ services:
       ANALYTICS_RETENTION_DAYS: "30"
       # No TWITCH_REDIRECT_URI pinned here: this app answers on two public
       # domains (streammulti.live + the multistream.robertmckinnon.au dev
-      # site, see robertmckinnon-au-hosting/caddy/Caddyfile), so the redirect is derived per-request
-      # from request.host_url instead (requires both URLs registered in the
-      # Twitch app's settings). Pin TWITCH_REDIRECT_URI in /etc/multistream.env
-      # only if you go back to a single fixed domain.
+      # site), so the redirect is derived per-request from request.host_url
+      # instead (requires both URLs registered in the Twitch app's settings).
+      # Pin TWITCH_REDIRECT_URI in /etc/multistream.env only if you go back to
+      # a single fixed domain.
     expose:
       - "6543"
     networks:

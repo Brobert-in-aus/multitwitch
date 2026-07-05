@@ -18,29 +18,29 @@ requires = [
     ]
 
 setup(name='multitwitch',
-      version='0.0',
-      description='multitwitch',
+      version='1.0.0',
+      description='StreamMulti -- a personal multistream control deck for Twitch',
       long_description=README + '\n\n' +  CHANGES,
       classifiers=[
         "Programming Language :: Python",
-        "Framework :: Pylons",
+        "Framework :: Pyramid",
+        "License :: OSI Approved :: MIT License",
         "Topic :: Internet :: WWW/HTTP",
         "Topic :: Internet :: WWW/HTTP :: WSGI :: Application",
         ],
-      author='',
+      author='Robert McKinnon',
       author_email='',
-      url='',
-      keywords='web wsgi bfg pylons pyramid',
+      url='https://github.com/Brobert-in-aus/multitwitch',
+      license='MIT',
+      keywords='web wsgi pyramid twitch multistream',
       packages=find_packages(),
       include_package_data=True,
       zip_safe=False,
-      test_suite='multitwitch',
+      test_suite='tests',
       install_requires=requires,
       entry_points="""\
       [paste.app_factory]
       main = multitwitch:main
-      [console_scripts]
-      initialize_multitwitch_db = multitwitch.scripts.initializedb:main
       """,
       )
 

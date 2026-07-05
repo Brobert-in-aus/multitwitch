@@ -1,5 +1,6 @@
 # Builds -> pushes to GHCR -> syncs compose to the VPS -> compose up.
-# Shared Caddy routing is owned by robertmckinnon-au-hosting.
+# The reverse-proxy TLS/routing layer is managed separately (see the example
+# Caddyfile in the README).
 #
 # Repo secrets required: DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY, DEPLOY_PORT (optional).
 # GITHUB_TOKEN is built in (used to push to GHCR).

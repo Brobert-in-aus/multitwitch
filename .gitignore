@@ -1,4 +1,6 @@
 *.pyc
+__pycache__/
+.pytest_cache/
 multitwitch.egg-info
 .venv/
 .claude/
