@@ -1757,6 +1757,33 @@ function attach_hls_stream(tile, name, video, url) {
         var hls = new Hls({
             liveSyncDuration: CONVERGENCE_STARTUP_LATENCY,
             nudgeMaxRetry: 5,
+            // Twitch segments load direct from CloudFront, bypassing our proxy,
+            // so an occasional mid-transfer connection drop
+            // (ERR_INCOMPLETE_CHUNKED_ENCODING) surfaces as a fragLoadError. The
+            // default errorRetry waits a full 1000ms before re-fetching -- on a
+            // solo Twitch page that's invisible, but here the stall becomes drift
+            // the convergence loop then "catches up" with a visible speed-up. A
+            // dropped chunk is instantaneous, not congestion, so there's no
+            // reason to back off before the first retry: re-request almost
+            // immediately to keep the gap under the convergence dead-band. Every
+            // other field is the hls.js 1.6.16 default, copied verbatim so the
+            // timeout-retry path is untouched.
+            fragLoadPolicy: {
+                default: {
+                    maxTimeToFirstByteMs: 10000,
+                    maxLoadTimeMs: 120000,
+                    timeoutRetry: {
+                        maxNumRetry: 4,
+                        retryDelayMs: 0,
+                        maxRetryDelayMs: 0,
+                    },
+                    errorRetry: {
+                        maxNumRetry: 6,
+                        retryDelayMs: 200,      // default 1000
+                        maxRetryDelayMs: 4000,  // default 8000
+                    },
+                },
+            },
             // Bound the MSE SourceBuffer hard, per tile, so a multi-hour session
             // across several streams can't climb until the tab dies with "Out of
             // Memory" (a silent browser-level abort, no console error).
@@ -2553,8 +2580,8 @@ function update_convergence_straggler_states(players) {
         sync_debug_log("straggler", {
             name: entry.name,
             gap: Number(gap.toFixed(3)),
-            enter: entry.straggler_enter_seconds,
-            exit: entry.straggler_exit_seconds,
+            enter: Number(entry.straggler_enter_seconds.toFixed(3)),
+            exit: Number(entry.straggler_exit_seconds.toFixed(3)),
             active: entry.is_straggler
         });
     }
