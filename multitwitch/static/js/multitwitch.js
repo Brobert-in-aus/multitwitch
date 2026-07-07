@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "124";
+var APP_VERSION = "125";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -1504,9 +1504,6 @@ function adapt_stream_qualities() {
         if (player.manual_paused || player.recovering) {
             continue;
         }
-        if (name === active_stream) {
-            continue;
-        }
         if (player.startup_pending || !player.startup_completed_at ||
             Date.now() - player.startup_completed_at < QUALITY_ADAPT_STARTUP_GRACE) {
             skipped_startup = true;
@@ -1521,6 +1518,9 @@ function adapt_stream_qualities() {
                 stream_quality_choice[name] = "best";
                 load_direct_stream(tile, name, true, "best");
             }
+            continue;
+        }
+        if (name === active_stream) {
             continue;
         }
         var rendered_height = player.video.clientHeight;

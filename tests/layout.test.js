@@ -112,6 +112,37 @@ test("adaptive quality does not interrupt active audio or fresh startup streams"
 });
 
 
+test("adaptive quality restores an active promoted main stream to best", () => {
+    const {context} = loadApplication();
+    const reloaded = [];
+    const oldDollar = context.$;
+    context.$ = selector => {
+        if (selector === "#streams .stream") {
+            return {length: 2};
+        }
+        return oldDollar(selector);
+    };
+    context.stream_tile_by_name = name => ({hasClass: className => name === "active" && className === "is_main"});
+    context.load_direct_stream = (_tile, name, _force, quality) => {
+        reloaded.push({name, quality});
+    };
+    context.active_stream = "active";
+    context.stream_quality_choice.active = "720p";
+    context.stream_players.active = {
+        video: {clientHeight: 900},
+        qualities: ["360p", "720p", "1080p"],
+        quality: "720p",
+        startup_pending: false,
+        startup_completed_at: Date.now() - context.QUALITY_ADAPT_STARTUP_GRACE - 1000
+    };
+
+    context.adapt_stream_qualities();
+
+    assert.deepEqual(reloaded, [{name: "active", quality: "best"}]);
+    assert.equal(context.stream_quality_choice.active, "best");
+});
+
+
 test("chat width is clamped without reducing the stream area below its floor", () => {
     const {context} = loadApplication();
 
