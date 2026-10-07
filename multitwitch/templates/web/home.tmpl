@@ -1,4 +1,4 @@
-{% set asset_version = 125 %}
+{% set asset_version = 126 %}
 <!DOCTYPE HTML>
 <html>
 <head>
@@ -9,7 +9,7 @@
 <script type="text/javascript" src="https://cdn.jsdelivr.net/npm/jquery-ui-dist@1.13.3/jquery-ui.min.js" integrity="sha384-oVpH0DXO9nadZxTmPSQo3YwWqfN/Up9aRDHCxLrw8A2LjkFNcM/XILw4KGMaL95z" crossorigin="anonymous"></script>
 <link rel="stylesheet" type="text/css" href="https://cdn.jsdelivr.net/npm/jquery-ui-dist@1.13.3/jquery-ui.min.css" integrity="sha384-Wdf9be1Zb3KyYwg8A+RZyGXu7V52PYvfwVvmBllPV+Zt39d2+PnJpzm8v6ZEbIIW" crossorigin="anonymous" />
 <script type="text/javascript" src="/static/js/mustache.js"></script>
-<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js"></script>
+<script type="text/javascript" src="https://cdn.jsdelivr.net/npm/hls.js@1.6.16/dist/hls.min.js" integrity="sha384-5E8B0pTlZZJMabWpC0fyYf6OUpe15jJij34BqBAh4NXoHAlLNOjCPRrwtOXOQFAn" crossorigin="anonymous"></script>
 <script type="text/javascript" src="/static/js/multitwitch.js?v={{ asset_version }}"></script>
 <script type="text/javascript">
 var twitch_parent_query = "{{ twitch_parent_query|e }}";
@@ -239,7 +239,7 @@ $(window).resize(function() {
     <p class="modal_intro">A personal control deck for watching several <a href="https://twitch.tv/">Twitch</a> channels in one window.</p>
 
     <h3>Adding streams</h3>
-    <p>Add channels straight in the URL &mdash; for example <a href="/gamesdonequick/esamarathon">/gamesdonequick/esamarathon</a> &mdash; or use the "Add a channel" box in the control deck. Drag a tile onto another to swap their positions, and save a lineup as a named preset to reload later without re-adding everything.</p>
+    <p>Add channels straight in the URL &mdash; for example <a href="/gamesdonequick/esamarathon">/gamesdonequick/esamarathon</a> &mdash; or use the "Add a channel" box in the control deck. Drag a tile to reorder the lineup, and save a lineup as a named preset to reload later without re-adding everything.</p>
 
     <h3>Layouts</h3>
     <ul>

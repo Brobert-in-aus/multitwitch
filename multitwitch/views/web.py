@@ -2,12 +2,19 @@ import re
 from urllib.parse import urlencode
 
 from multitwitch.lib.session import web, ajax
+from pyramid.httpexceptions import HTTPNotFound
 from pyramid.response import FileResponse, Response
+
+# Path prefixes owned by real routes. An unknown URL under one of them is a
+# missing endpoint, not a list of channel names for the catch-all page.
+RESERVED_PREFIXES = ('api', 'auth', 'admin', 'static')
 
 class WebView:
     @web(template="web/home.tmpl")
     def home(request):
         streams = request.matchdict['streams']
+        if streams and streams[0].lower() in RESERVED_PREFIXES:
+            raise HTTPNotFound()
         darkmode = 'darkmode' in request.params
         parent_domain = request.domain
         twitch_parent_query = urlencode([('parent', parent_domain)])

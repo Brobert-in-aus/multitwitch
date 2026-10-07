@@ -1,7 +1,8 @@
+import logging
 import re
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urljoin, urlsplit
 from urllib.request import Request, urlopen
@@ -17,12 +18,21 @@ except Exception:
     Streamlink = None
 
 
+log = logging.getLogger(__name__)
+
 CHANNEL_RE = re.compile(r'^[A-Za-z0-9_]{1,25}$')
 STREAM_CACHE_TTL = 60
+# Offline results are cached briefly too: a tile left open on an ended stream
+# keeps asking, and each uncached ask is a full Streamlink resolve.
+STREAM_OFFLINE_CACHE_TTL = 15
 STREAM_CACHE_FORCE_REFRESH_AGE = 5
 STREAM_CACHE_MAX_ENTRIES = 256
 STREAM_CACHE = {}
 STREAM_CACHE_LOCK = threading.Lock()
+# In-flight resolves keyed like STREAM_CACHE, so concurrent requests for the
+# same channel share one Streamlink resolve instead of each starting their own.
+STREAM_INFLIGHT = {}
+HLS_PLAYLIST_MAX_BYTES = 4 * 1024 * 1024
 STREAM_RESOLVE_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 LIVE_STATUS_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 
@@ -51,28 +61,53 @@ def stream_url(request):
         cache_age = now - cached.get('resolved_at', 0) if cached else None
         refresh_allowed = force_refresh and cache_age is not None and cache_age >= STREAM_CACHE_FORCE_REFRESH_AGE
         if cached and cached['expires_at'] > now and not refresh_allowed:
+            if cached.get('offline'):
+                return _json_response({'error': 'Stream offline.'}, status=404)
             return _json_response(cached['data'])
+        future = STREAM_INFLIGHT.get(cache_key)
+        owner = future is None
+        if owner:
+            future = STREAM_INFLIGHT[cache_key] = Future()
+
+    if owner:
+        try:
+            future.set_result(_resolve_stream_url_with_live_check(channel, quality))
+        except BaseException as exc:
+            future.set_exception(exc)
+        finally:
+            with STREAM_CACHE_LOCK:
+                STREAM_INFLIGHT.pop(cache_key, None)
 
     try:
-        data = _resolve_stream_url_with_live_check(channel, quality)
+        data = future.result()
     except StreamOffline:
+        if owner:
+            _store_stream_cache(cache_key, {'offline': True}, STREAM_OFFLINE_CACHE_TTL)
         return _json_response({'error': 'Stream offline.'}, status=404)
-    except Exception as exc:
-        return _json_response({'error': str(exc)}, status=502)
+    except Exception:
+        # The detail (internal paths, upstream URLs) goes to the server log
+        # only; browsers get a generic message.
+        if owner:
+            log.warning('Stream resolve failed for %s (%s)', channel, quality, exc_info=True)
+        return _json_response({'error': 'Could not load stream.'}, status=502)
 
+    if owner:
+        _store_stream_cache(cache_key, {'data': data}, STREAM_CACHE_TTL)
+    return _json_response(data)
+
+
+def _store_stream_cache(cache_key, entry, ttl):
+    now = time.time()
     with STREAM_CACHE_LOCK:
-        if len(STREAM_CACHE) >= STREAM_CACHE_MAX_ENTRIES:
+        if cache_key not in STREAM_CACHE and len(STREAM_CACHE) >= STREAM_CACHE_MAX_ENTRIES:
             oldest_key = min(
                 STREAM_CACHE,
                 key=lambda key: STREAM_CACHE[key]['expires_at'],
             )
             del STREAM_CACHE[oldest_key]
-        STREAM_CACHE[cache_key] = {
-            'data': data,
-            'expires_at': now + STREAM_CACHE_TTL,
-            'resolved_at': now,
-        }
-    return _json_response(data)
+        entry['expires_at'] = now + ttl
+        entry['resolved_at'] = now
+        STREAM_CACHE[cache_key] = entry
 
 
 class StreamOffline(Exception):
@@ -182,14 +217,20 @@ def hls_proxy(request):
     proxied = Request(raw_url, headers={'User-Agent': 'Mozilla/5.0'})
     try:
         with urlopen(proxied, timeout=10) as upstream:
-            body = upstream.read().decode('utf-8', 'replace')
+            raw_body = upstream.read(HLS_PLAYLIST_MAX_BYTES + 1)
             final_url = upstream.geturl() if hasattr(upstream, 'geturl') else raw_url
     except HTTPError as exc:
+        exc.close()
         return _json_response({'error': 'Upstream returned %d.' % exc.code}, status=502)
     except URLError as exc:
         return _json_response({'error': str(exc.reason)}, status=502)
     if not _is_allowed_hls_url(final_url):
         return _json_response({'error': 'Upstream redirect host is not allowed.'}, status=502)
+    # Playlists are a few KB; anything this large is a media segment being
+    # pulled through the proxy, which it is not for.
+    if len(raw_body) > HLS_PLAYLIST_MAX_BYTES:
+        return _json_response({'error': 'Upstream response is too large.'}, status=502)
+    body = raw_body.decode('utf-8', 'replace')
 
     response = Response(
         body=_rewrite_playlist(body, final_url).encode('utf-8'),

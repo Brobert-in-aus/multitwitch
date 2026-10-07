@@ -2,11 +2,14 @@ import json
 import os
 import re
 import tempfile
+import threading
 import time
 import unittest
 from types import SimpleNamespace
 from unittest import mock
 from urllib.error import URLError
+
+from pyramid.httpexceptions import HTTPNotFound
 
 from multitwitch.views import analytics, direct, feedback, twitch
 from multitwitch.views.web import WebView
@@ -59,6 +62,17 @@ class WebViewTests(unittest.TestCase):
         self.assertNotIn('id="latency_sync_panel"', response.text)
         self.assertNotIn('initialize_latency_sync', response.text)
 
+    def test_unknown_path_under_a_reserved_prefix_is_404_not_the_app_page(self):
+        request = SimpleNamespace(
+            matchdict={'streams': ['api', 'stream', 'summit1g']},
+            params={},
+            domain='localhost',
+            host='localhost:6543',
+        )
+
+        with self.assertRaises(HTTPNotFound):
+            WebView.home(request)
+
     def test_healthz(self):
         response = WebView.healthz(SimpleNamespace())
 
@@ -110,13 +124,66 @@ class DirectStreamTests(unittest.TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertEqual(response_json(response)['error'], 'Stream offline.')
 
-    def test_failed_resolution_preserves_error_for_live_channel(self):
+    def test_failed_resolution_for_live_channel_hides_internal_error_detail(self):
         with mock.patch.object(direct, '_resolve_stream_url', side_effect=RuntimeError('resolver failed')):
             with mock.patch.object(direct, 'channel_is_live', return_value=True):
-                response = direct.stream_url(self.request('livechannel'))
+                with self.assertLogs(direct.log, level='WARNING'):
+                    response = direct.stream_url(self.request('livechannel'))
 
         self.assertEqual(response.status_code, 502)
-        self.assertEqual(response_json(response)['error'], 'resolver failed')
+        self.assertEqual(response_json(response)['error'], 'Could not load stream.')
+
+    def test_offline_result_is_cached_briefly(self):
+        resolver = mock.Mock(side_effect=RuntimeError('resolver failed'))
+        with mock.patch.object(direct, '_resolve_stream_url', resolver):
+            with mock.patch.object(direct, 'channel_is_live', return_value=False):
+                first = direct.stream_url(self.request('offlinechannel'))
+                second = direct.stream_url(self.request('offlinechannel', refresh='1'))
+
+        self.assertEqual(first.status_code, 404)
+        self.assertEqual(second.status_code, 404)
+        self.assertEqual(resolver.call_count, 1)
+
+    def test_concurrent_requests_for_one_channel_share_a_single_resolve(self):
+        data = {'channel': 'livechannel', 'quality': 'best', 'qualities': [], 'url': 'https://video.example/live.m3u8'}
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def slow_resolve(_channel, _quality):
+            calls.append(1)
+            started.set()
+            release.wait(2.0)
+            return data
+
+        responses = []
+        with mock.patch.object(direct, '_resolve_stream_url', side_effect=slow_resolve):
+            with mock.patch.object(direct, 'channel_is_live', return_value=True):
+                threads = [
+                    threading.Thread(target=lambda: responses.append(direct.stream_url(self.request('livechannel'))))
+                    for _ in range(3)
+                ]
+                threads[0].start()
+                started.wait(2.0)
+                for thread in threads[1:]:
+                    thread.start()
+                time.sleep(0.1)
+                release.set()
+                for thread in threads:
+                    thread.join(3.0)
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([response.status_code for response in responses], [200, 200, 200])
+
+    def test_resolve_closes_the_streamlink_http_pool(self):
+        fake_session = mock.Mock()
+        fake_session.streams.side_effect = RuntimeError('boom')
+
+        with mock.patch.object(direct, 'Streamlink', return_value=fake_session):
+            with self.assertRaises(RuntimeError):
+                direct._resolve_stream_url('gamesdonequick', 'best')
+
+        fake_session.http.close.assert_called_once_with()
 
     def test_confirmed_offline_does_not_wait_for_slow_stream_resolution(self):
         def slow_resolve(_channel, _quality):
@@ -311,13 +378,38 @@ class TwitchViewTests(unittest.TestCase):
             'live': True,
         })
 
+    def setUp(self):
+        twitch.CHANNEL_METADATA_CACHE.clear()
+
+    def tearDown(self):
+        twitch.CHANNEL_METADATA_CACHE.clear()
+
+    def session_request(self, db_path, params=None, cookie=None):
+        return SimpleNamespace(
+            registry=SimpleNamespace(settings={
+                'twitch.client_id': 'client',
+                'twitch.client_secret': 'secret',
+                'twitch.redirect_uri': 'http://localhost:6543/auth/twitch/callback',
+                'twitch.session_db': db_path,
+            }),
+            host_url='http://localhost:6543',
+            scheme='http',
+            params=params or {},
+            headers={'Cookie': twitch.COOKIE_NAME + '=' + cookie} if cookie else {},
+        )
+
     def test_public_streams_returns_loaded_stream_metadata_without_auth(self):
         request = SimpleNamespace(params=self.Params({'user_login': ['GamesDoneQuick', 'other_channel']}))
-        with mock.patch.object(twitch, 'channel_metadata', side_effect=[
-            {'user_login': 'gamesdonequick', 'user_name': 'GamesDoneQuick', 'title': 'Live', 'game_name': 'Game', 'live': True},
-            None,
-        ]):
+        metadata = {
+            'gamesdonequick': {'user_login': 'gamesdonequick', 'user_name': 'GamesDoneQuick', 'title': 'Live', 'game_name': 'Game', 'live': True},
+            'other_channel': None,
+        }
+        with mock.patch.object(twitch, 'channel_metadata', side_effect=metadata.get) as lookup:
             response = twitch.public_streams(request)
+            twitch.public_streams(request)
+
+        # The second request is served from the short metadata cache.
+        self.assertEqual(lookup.call_count, 2)
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response_json(response)['data'], [
@@ -331,6 +423,44 @@ class TwitchViewTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 400)
         self.assertEqual(response_json(response)['error'], 'Invalid Twitch channel.')
+
+    def test_callback_without_state_is_rejected_for_a_session_that_never_started_login(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            request = self.session_request(os.path.join(temp_dir, 's.sqlite3'), params={'code': 'attacker-code'})
+            with mock.patch.object(twitch, '_token_request') as token_request:
+                twitch.auth_callback(request)
+
+            token_request.assert_not_called()
+
+    def test_me_refreshes_an_expired_access_token_instead_of_logging_out(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            request = self.session_request(os.path.join(temp_dir, 's.sqlite3'), cookie='sid')
+            twitch._save_session(request, 'sid', {'token': {'access_token': 'old', 'refresh_token': 'refresh'}})
+
+            def validate(access_token):
+                if access_token == 'old':
+                    raise twitch.TwitchRequestError(401, 'invalid access token')
+                return {'login': 'viewer', 'user_id': '42'}
+
+            with mock.patch.object(twitch, '_validate_token', side_effect=validate):
+                with mock.patch.object(twitch, '_token_request', return_value={
+                    'access_token': 'new', 'refresh_token': 'refresh2', 'expires_in': 3600,
+                }):
+                    response = twitch.me(request)
+
+            self.assertTrue(response_json(response)['connected'])
+            self.assertEqual(twitch._load_session(request, 'sid')['token']['access_token'], 'new')
+
+    def test_me_keeps_the_token_when_twitch_is_unreachable(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            request = self.session_request(os.path.join(temp_dir, 's.sqlite3'), cookie='sid')
+            twitch._save_session(request, 'sid', {'token': {'access_token': 'old', 'refresh_token': 'refresh'}})
+
+            with mock.patch.object(twitch, '_validate_token', side_effect=twitch.TwitchRequestError(502, 'timed out')):
+                response = twitch.me(request)
+
+            self.assertFalse(response_json(response)['connected'])
+            self.assertEqual(twitch._load_session(request, 'sid')['token']['access_token'], 'old')
 
     def test_safe_return_to_rejects_external_or_protocol_relative_urls(self):
         self.assertEqual(twitch._safe_return_to('https://example.com'), '/')

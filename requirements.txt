@@ -18,7 +18,27 @@ zope.interface==8.5
 zope.deprecation==6.0
 streamlink==8.4.0
 maxminddb==3.1.1
-# Transitive Streamlink deps, pinned because unpinned upgrades break it at
-# build time (urllib3 2.8.0 is incompatible with streamlink 8.4.0).
+# Transitive Streamlink deps, pinned to the versions verified locally: an
+# unpinned upgrade at image build time has broken stream resolving before
+# (urllib3 2.8.0 is incompatible with streamlink 8.4.0).
 requests==2.34.2
 urllib3==2.7.0
+certifi==2026.6.17
+charset-normalizer==3.4.7
+idna==3.18
+isodate==0.7.2
+lxml==6.1.1
+pycountry==26.2.16
+pycryptodome==3.23.0
+PySocks==1.7.1
+websocket-client==1.9.0
+trio==0.33.0
+trio-websocket==0.12.2
+attrs==26.1.0
+exceptiongroup==1.3.1
+h11==0.16.0
+outcome==1.3.0.post0
+sniffio==1.3.1
+sortedcontainers==2.4.0
+typing_extensions==4.15.0
+wsproto==1.3.2

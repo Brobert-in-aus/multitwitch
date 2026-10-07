@@ -47,6 +47,7 @@ LOGIN_WINDOW_SECONDS = 300
 LOGIN_MAX_ATTEMPTS = 8
 _LOGIN_LOCK = threading.Lock()
 _LOGIN_ATTEMPTS = {}
+LOGIN_MAX_KEYS = 1000
 
 
 # --- Endpoints -------------------------------------------------------------
@@ -194,6 +195,10 @@ def _allow_login_attempt(key):
     now = time.monotonic()
     with _LOGIN_LOCK:
         attempts = [t for t in _LOGIN_ATTEMPTS.get(key, []) if now - t < LOGIN_WINDOW_SECONDS]
+        if len(_LOGIN_ATTEMPTS) >= LOGIN_MAX_KEYS:
+            for stale in [k for k, seen in _LOGIN_ATTEMPTS.items()
+                          if not seen or now - seen[-1] >= LOGIN_WINDOW_SECONDS]:
+                del _LOGIN_ATTEMPTS[stale]
         if len(attempts) >= LOGIN_MAX_ATTEMPTS:
             _LOGIN_ATTEMPTS[key] = attempts
             return False

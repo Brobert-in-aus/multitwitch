@@ -17,6 +17,10 @@ if __name__ == "__main__":
         app,
         host='0.0.0.0',
         port=port,
+        # Stream resolves block a worker for seconds at a time; waitress's
+        # default of 4 threads stalls the whole site behind a few of them.
+        # (production.ini's [server:main] is not read on this code path.)
+        threads=16,
         trusted_proxy='*',
         # x-forwarded-for is trusted too so request.remote_addr is the real
         # client IP (used only transiently for rate-limiting and country

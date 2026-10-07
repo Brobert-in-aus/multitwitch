@@ -13,6 +13,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -32,7 +33,14 @@ const (
 	cacheTTL            = 1500 * time.Millisecond
 	cacheSweepInterval  = 5 * time.Second
 	upstreamTimeout     = 10 * time.Second
+	// Playlists are a few KB. The cap stops the proxy being used to pull
+	// multi-megabyte media segments (also on *.ttvnw.net) through its 64MB
+	// container.
+	maxPlaylistBytes = 4 << 20
+	maxRedirects     = 5
 )
+
+var errPlaylistTooLarge = errors.New("upstream response is too large")
 
 var (
 	hlsURIAttrRe = regexp.MustCompile(`URI="([^"]+)"`)
@@ -43,6 +51,17 @@ var (
 	// TCP+TLS handshake every 2-4s per playing tile.
 	httpClient = &http.Client{
 		Timeout: upstreamTimeout,
+		// Only follow redirects that stay on the allowlist, so an upstream
+		// redirect can't steer this server at an arbitrary host.
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return errors.New("too many redirects")
+			}
+			if !isAllowedHLSURL(req.URL.String()) {
+				return errors.New("upstream redirect host is not allowed")
+			}
+			return nil
+		},
 		Transport: &http.Transport{
 			MaxIdleConns:        200,
 			MaxIdleConnsPerHost: 100,
@@ -269,9 +288,12 @@ func fetchUpstream(rawURL string) (body, finalURL string, status int, err error)
 	}
 	defer resp.Body.Close()
 
-	b, err := io.ReadAll(resp.Body)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, maxPlaylistBytes+1))
 	if err != nil {
 		return "", "", 0, err
+	}
+	if len(b) > maxPlaylistBytes {
+		return "", "", 0, errPlaylistTooLarge
 	}
 
 	final := rawURL

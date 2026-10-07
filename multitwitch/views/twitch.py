@@ -1,9 +1,12 @@
+import hmac
 import json
 import os
 import re
 import secrets
 import sqlite3
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.cookies import SimpleCookie
 from urllib.error import HTTPError, URLError
@@ -30,6 +33,14 @@ ENV_FILE_PATHS = (
     os.path.join(PROJECT_ROOT, 'multistream.env'),
 )
 ENV_FILE_VALUES = None
+SESSION_MAX_AGE = 90 * 24 * 3600
+SESSION_PRUNE_INTERVAL = 24 * 3600
+_SESSION_PRUNED_AT = 0
+CHANNEL_METADATA_CACHE_TTL = 30
+CHANNEL_METADATA_CACHE_MAX_ENTRIES = 2000
+CHANNEL_METADATA_CACHE = {}
+CHANNEL_METADATA_LOCK = threading.Lock()
+CHANNEL_METADATA_EXECUTOR = ThreadPoolExecutor(max_workers=8)
 GUEST_STAR_BATCH_COLLABORATION_QUERY = '''
 query GuestStarBatchCollaborationQuery(
   $options: GuestStarChannelCollaborationOptions,
@@ -150,7 +161,12 @@ def auth_callback(request):
 
     if not settings['configured']:
         return _auth_complete(request, session_id, session)
-    if request.params.get('state') != session.get('state'):
+    # A session that never started a login has no state; without the explicit
+    # check a callback carrying no state would compare None to None and pass.
+    expected_state = session.get('state')
+    if not expected_state or not hmac.compare_digest(
+        str(request.params.get('state') or '').encode('utf-8'), expected_state.encode('utf-8'),
+    ):
         session['auth_error'] = 'Twitch returned an invalid state.'
         return _auth_complete(request, session_id, session)
     if request.params.get('error'):
@@ -236,8 +252,16 @@ def me(request):
         })
 
     try:
-        user = _validate_token(session['token']['access_token'])
+        user = _validated_user(settings, session)
     except TwitchRequestError:
+        # Twitch unreachable or erroring: keep the token so the next page load
+        # can still use it, rather than logging the user out over a blip.
+        return _json_response({
+            'configured': True,
+            'connected': False,
+            'message': 'Could not reach Twitch. Try again shortly.',
+        })
+    if user is None:
         session.pop('token', None)
         _save_existing_session(request, session)
         return _json_response({
@@ -285,15 +309,28 @@ def public_streams(request):
     if logins is None:
         return _json_response({'error': 'Invalid Twitch channel.'}, status=400)
 
-    data = []
     try:
-        for login in logins:
-            metadata = channel_metadata(login)
-            if metadata:
-                data.append(metadata)
+        results = list(CHANNEL_METADATA_EXECUTOR.map(_cached_channel_metadata, logins))
     except TwitchRequestError as exc:
         return _json_response({'error': exc.message}, status=exc.status)
-    return _json_response({'data': data})
+    return _json_response({'data': [metadata for metadata in results if metadata]})
+
+
+def _cached_channel_metadata(login):
+    now = time.time()
+    with CHANNEL_METADATA_LOCK:
+        cached = CHANNEL_METADATA_CACHE.get(login)
+        if cached and cached[0] > now:
+            return cached[1]
+    metadata = channel_metadata(login)
+    with CHANNEL_METADATA_LOCK:
+        if len(CHANNEL_METADATA_CACHE) >= CHANNEL_METADATA_CACHE_MAX_ENTRIES:
+            for key in [key for key, entry in CHANNEL_METADATA_CACHE.items() if entry[0] <= now]:
+                del CHANNEL_METADATA_CACHE[key]
+            if len(CHANNEL_METADATA_CACHE) >= CHANNEL_METADATA_CACHE_MAX_ENTRIES:
+                CHANNEL_METADATA_CACHE.clear()
+        CHANNEL_METADATA_CACHE[login] = (now + CHANNEL_METADATA_CACHE_TTL, metadata)
+    return metadata
 
 
 def channel_is_live(login):
@@ -469,25 +506,50 @@ def _require_authenticated_session(request):
     if not session or 'token' not in session:
         return _json_response({'error': 'Not connected to Twitch.'}, status=401)
 
-    if session['token'].get('expires_at', 0) < int(time.time()) + 60:
-        if not _refresh_token(settings, session):
-            session.pop('token', None)
+    try:
+        if session['token'].get('expires_at', 0) < int(time.time()) + 60:
+            if not _refresh_token(settings, session):
+                session.pop('token', None)
+                _save_existing_session(request, session)
+                return _json_response({'error': 'Twitch session expired.'}, status=401)
             _save_existing_session(request, session)
-            return _json_response({'error': 'Twitch session expired.'}, status=401)
-        _save_existing_session(request, session)
 
-    if 'user' not in session:
-        try:
-            session['user'] = _validate_token(session['token']['access_token'])
+        if 'user' not in session:
+            user = _validated_user(settings, session)
+            if user is None:
+                session.pop('token', None)
+                _save_existing_session(request, session)
+                return _json_response({'error': 'Twitch session expired.'}, status=401)
+            session['user'] = user
             _save_existing_session(request, session)
-        except TwitchRequestError:
-            session.pop('token', None)
-            _save_existing_session(request, session)
-            return _json_response({'error': 'Twitch session expired.'}, status=401)
+    except TwitchRequestError as exc:
+        # Transient Twitch failure: report it, but keep the session's token.
+        return _json_response({'error': exc.message}, status=502)
 
     return session
 
 
+# Returns the validated user for the session's token, refreshing an expired
+# access token first. None means Twitch rejected the token for good; a
+# TwitchRequestError means Twitch could not be asked (keep the token).
+def _validated_user(settings, session):
+    try:
+        return _validate_token(session['token']['access_token'])
+    except TwitchRequestError as exc:
+        if exc.status != 401:
+            raise
+    if not _refresh_token(settings, session):
+        return None
+    try:
+        return _validate_token(session['token']['access_token'])
+    except TwitchRequestError as exc:
+        if exc.status != 401:
+            raise
+        return None
+
+
+# False means the refresh token was rejected; other Twitch/network failures
+# propagate so callers don't discard a token that is still good.
 def _refresh_token(settings, session):
     refresh_token = session.get('token', {}).get('refresh_token')
     if not refresh_token:
@@ -499,7 +561,9 @@ def _refresh_token(settings, session):
             'grant_type': 'refresh_token',
             'refresh_token': refresh_token,
         })
-    except TwitchRequestError:
+    except TwitchRequestError as exc:
+        if exc.status not in (400, 401, 403):
+            raise
         return False
     session['token'] = token_data
     session['token']['expires_at'] = int(time.time()) + int(token_data.get('expires_in', 0))
@@ -546,7 +610,8 @@ def _request_json(request):
         with urlopen(request, timeout=10) as response:
             return json.loads(response.read().decode('utf-8') or '{}')
     except HTTPError as exc:
-        body = exc.read().decode('utf-8')
+        with exc:
+            body = exc.read().decode('utf-8', 'replace')
         try:
             data = json.loads(body)
             message = data.get('message') or data.get('error') or body
@@ -703,13 +768,23 @@ def _save_existing_session(request, session):
 
 
 def _save_session(request, session_id, session):
+    global _SESSION_PRUNED_AT
     data = dict(session)
     data.pop('id', None)
+    now = int(time.time())
     with _session_connection(request) as conn:
         conn.execute(
             'INSERT OR REPLACE INTO twitch_sessions (id, data, updated_at) VALUES (?, ?, ?)',
-            (session_id, json.dumps(data), int(time.time())),
+            (session_id, json.dumps(data), now),
         )
+        # Sessions are re-saved whenever they are used, so anything untouched
+        # for SESSION_MAX_AGE is abandoned; prune at most once a day.
+        if now - _SESSION_PRUNED_AT >= SESSION_PRUNE_INTERVAL:
+            _SESSION_PRUNED_AT = now
+            conn.execute(
+                'DELETE FROM twitch_sessions WHERE updated_at < ?',
+                (now - SESSION_MAX_AGE,),
+            )
 
 
 def _delete_session(request, session_id):

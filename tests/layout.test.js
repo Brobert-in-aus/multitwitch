@@ -96,7 +96,7 @@ test("adaptive quality does not interrupt active audio or fresh startup streams"
     function player(startupCompletedAt) {
         return {
             video: {clientHeight: 500},
-            qualities: ["360p", "720p"],
+            qualities: ["360p", "720p", "1080p60"],
             quality: "best",
             startup_pending: false,
             startup_completed_at: startupCompletedAt
@@ -105,6 +105,10 @@ test("adaptive quality does not interrupt active audio or fresh startup streams"
     context.stream_players.active = player(stableCompletedAt);
     context.stream_players.fresh = player(freshCompletedAt);
     context.stream_players.stable = player(stableCompletedAt);
+    // Big enough to need the top rendition, which "best" already is: reloading
+    // it to the same stream under its concrete label would be pure churn.
+    context.stream_players.large = player(stableCompletedAt);
+    context.stream_players.large.video = {clientHeight: 1000};
 
     context.adapt_stream_qualities();
 
@@ -1435,7 +1439,8 @@ test("unlocking audio persists an unmuted master state for refresh", () => {
     context.update_mute_button = () => {};
     context.update_volume_display = () => {};
     context.sync_active_stream_audio = () => {};
-    context.master_muted = true;
+    context.audio_unlocked = false;
+    context.master_muted = false;
     context.master_volume = 0;
 
     context.unlock_audio();
@@ -1445,6 +1450,25 @@ test("unlocking audio persists an unmuted master state for refresh", () => {
     assert.equal(context.master_volume, 0.7);
     assert.equal(localStorage.getItem("multitwitch.masterMuted"), "false");
     assert.equal(localStorage.getItem("multitwitch.masterVolume"), "0.7");
+});
+
+
+test("the first click after reload does not wipe a saved master mute", () => {
+    const {context, localStorage} = loadApplication();
+    context.update_mute_button = () => {};
+    context.update_volume_display = () => {};
+    context.sync_active_stream_audio = () => {};
+    // A saved mute starts the page locked (see saved_audio_should_start_unlocked).
+    context.audio_unlocked = false;
+    context.master_muted = true;
+    context.master_volume = 0.4;
+
+    context.unlock_audio();
+
+    assert.equal(context.audio_unlocked, true);
+    assert.equal(context.master_muted, true);
+    assert.equal(context.master_volume, 0.4);
+    assert.equal(localStorage.getItem("multitwitch.masterMuted"), null);
 });
 
 

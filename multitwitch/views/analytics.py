@@ -51,6 +51,7 @@ ALLOWED_FIELDS = {
 _WRITE_LOCK = threading.Lock()
 _RATE_LIMIT_LOCK = threading.Lock()
 _RATE_LIMIT_BUCKETS = {}
+RATE_LIMIT_MAX_KEYS = 5000
 _CLEANUP_DATES = set()
 
 
@@ -318,6 +319,12 @@ def _allow_event(key):
     now = time.monotonic()
     with _RATE_LIMIT_LOCK:
         bucket = [seen for seen in _RATE_LIMIT_BUCKETS.get(key, []) if now - seen < RATE_LIMIT_SECONDS]
+        if len(_RATE_LIMIT_BUCKETS) >= RATE_LIMIT_MAX_KEYS:
+            # Drop clients with nothing left in the window so the table does
+            # not grow by one entry per IP for the life of the process.
+            for stale in [k for k, seen in _RATE_LIMIT_BUCKETS.items()
+                          if not seen or now - seen[-1] >= RATE_LIMIT_SECONDS]:
+                del _RATE_LIMIT_BUCKETS[stale]
         if len(bucket) >= MAX_EVENTS_PER_WINDOW:
             _RATE_LIMIT_BUCKETS[key] = bucket
             return False

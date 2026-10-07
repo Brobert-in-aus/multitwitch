@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "125";
+var APP_VERSION = "126";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -123,6 +123,16 @@ var CONVERGENCE_DEFICIT_CLAMP = 30;
 var convergence_timer = null;
 var convergence_disabled = false;
 var stream_load_pending = {};
+// name -> counter bumped by every load request and by removal, so a response
+// that arrives after a newer request (or after the tile is gone) is dropped.
+var stream_load_seq = {};
+// name -> {attempt, timer} for tiles whose very first load failed; they have
+// no player object yet, so the normal recovery path cannot retry them.
+var stream_first_load_retry = {};
+var FIRST_LOAD_MAX_RETRIES = 5;
+// How often an offline tile asks (cheaply) whether its channel is live again.
+var OFFLINE_RECHECK_INTERVAL = 60000;
+var followed_load_seq = 0;
 var startup_sync_timer = null;
 var sync_debug_enabled = false;
 var twitch_user = null;
@@ -813,6 +823,8 @@ function remove_stream(name) {
     delete stream_together_results[name];
     delete stream_quality_choice[name];
     delete stream_audio[name];
+    stream_load_seq[name] = (stream_load_seq[name] || 0) + 1;
+    cancel_first_load_retry(name);
     stream_tile_by_name(name).remove();
     $("#chat-" + name).remove();
     $("#tablist a[href='#chat-" + name + "']").closest("li").remove();
@@ -1141,7 +1153,7 @@ function persist_audio_settings() {
 function load_saved_layout_mode() {
     try {
         var saved = window.localStorage.getItem(LAYOUT_MODE_STORAGE_KEY);
-        if (saved && VALID_LAYOUT_MODES[saved]) {
+        if (saved && Object.prototype.hasOwnProperty.call(VALID_LAYOUT_MODES, saved)) {
             return saved;
         }
     } catch (e) {}
@@ -1205,7 +1217,12 @@ function unlock_audio() {
         return;
     }
     audio_unlocked = true;
-    remember_unmuted_audio_state();
+    // A saved master mute also starts the page locked, but that mute is the
+    // user's own choice rather than the browser's autoplay block: lift the
+    // lock and leave it muted until they unmute.
+    if (!master_muted) {
+        remember_unmuted_audio_state();
+    }
     update_mute_button();
     update_volume_display();
     sync_active_stream_audio();
@@ -1510,13 +1527,18 @@ function adapt_stream_qualities() {
             continue;
         }
         var tile = stream_tile_by_name(name);
+        // "best" and the top rendition's own label are the same stream; a reload
+        // between the two is a full teardown and server resolve for nothing.
+        var top_quality = pick_quality_for_height(player.qualities, Infinity);
         // The main (focus) tile and a lone stream are the focus of attention and
         // big enough to deserve full resolution -- never downgrade them. If one
         // was shrunk while in the rest strip and then promoted, pull it back up.
         if (only_stream || tile.hasClass("is_main")) {
             if (stream_quality_choice[name] && stream_quality_choice[name] !== "best") {
                 stream_quality_choice[name] = "best";
-                load_direct_stream(tile, name, true, "best");
+                if (player.quality !== "best" && player.quality !== top_quality) {
+                    load_direct_stream(tile, name, true, "best", true);
+                }
             }
             continue;
         }
@@ -1528,18 +1550,21 @@ function adapt_stream_qualities() {
             continue;
         }
         var target = pick_quality_for_height(player.qualities, Math.round(rendered_height * dpr));
-        if (target === "best" || target === player.quality) {
+        if (target === "best" || target === player.quality ||
+            (target === top_quality && player.quality === "best")) {
             continue;
         }
         stream_quality_choice[name] = target;
-        load_direct_stream(tile, name, true, target);
+        load_direct_stream(tile, name, true, target, true);
     }
     if (skipped_startup) {
         schedule_quality_adaptation();
     }
 }
 
-function load_direct_stream(tile, name, force_refresh, quality) {
+// `adaptive` marks a quality-adapter reload of a stream that is already
+// playing: if that request fails the existing playback is left alone.
+function load_direct_stream(tile, name, force_refresh, quality, adaptive) {
     var video = tile.find("video.direct_player").get(0);
     if (!video) {
         return;
@@ -1547,6 +1572,8 @@ function load_direct_stream(tile, name, force_refresh, quality) {
     // Reloads (recovery, quality changes) keep the last requested quality so a
     // recovery doesn't silently revert an adapted stream back to "best".
     var requested_quality = quality || stream_quality_choice[name] || "best";
+    var load_seq = (stream_load_seq[name] || 0) + 1;
+    stream_load_seq[name] = load_seq;
     stream_load_pending[name] = true;
     set_player_status(tile, "Loading stream...");
     $.ajax({
@@ -1554,6 +1581,21 @@ function load_direct_stream(tile, name, force_refresh, quality) {
         data: {quality: requested_quality, refresh: force_refresh ? "1" : "0"},
         timeout: 20000,
         success: function(data) {
+            // Superseded by a newer request, or the tile was removed while this
+            // one was in flight: attaching now would create a player nothing owns.
+            if (stream_load_seq[name] !== load_seq || streams.indexOf(name) === -1) {
+                return;
+            }
+            cancel_first_load_retry(name);
+            var existing = stream_players[name];
+            if (existing && existing.manual_paused) {
+                // The user paused while this reload was in flight; keep it paused.
+                stream_load_pending[name] = false;
+                existing.recovering = false;
+                set_player_status(tile, "");
+                maybe_release_startup_sync();
+                return;
+            }
             attach_hls_stream(tile, name, video, data.url);
             stream_load_pending[name] = false;
             maybe_release_startup_sync();
@@ -1565,19 +1607,100 @@ function load_direct_stream(tile, name, force_refresh, quality) {
             }
         },
         error: function(xhr, text_status, error_thrown) {
+            if (stream_load_seq[name] !== load_seq || streams.indexOf(name) === -1) {
+                return;
+            }
             stream_load_pending[name] = false;
             maybe_release_startup_sync();
             log_stream_api_error(name, xhr, text_status, error_thrown);
             var message = (xhr.responseJSON && xhr.responseJSON.error) || "Could not load stream.";
-            if (stream_players[name]) {
-                stream_players[name].recovering = false;
-                stream_players[name].stalled = true;
+            var player = stream_players[name];
+            if (adaptive && player && !player.stalled && !player.recovering) {
+                // Only the rendition switch failed; the stream itself is fine.
+                stream_quality_choice[name] = player.quality || "best";
+                set_player_status(tile, "");
+                return;
+            }
+            if (message == "Stream offline.") {
+                mark_stream_offline(name);
+            } else if (player) {
+                player.recovering = false;
+                player.stalled = true;
                 update_stream_playback_state(name);
                 schedule_stream_recovery(name);
+            } else {
+                schedule_first_load_retry(name, requested_quality);
             }
             classify_stream_load_error(tile, name, message);
         }
     });
+}
+
+// The channel is confirmed offline: stop the reload/backoff loop (each attempt
+// is a full resolve on the server) and fall back to the slow live-status poll
+// in ensure_stream_playing.
+function mark_stream_offline(name) {
+    cancel_first_load_retry(name);
+    var player = stream_players[name];
+    if (!player) {
+        return;
+    }
+    player.offline = true;
+    player.offline_checked_at = Date.now();
+    player.recovering = false;
+    player.stalled = true;
+    if (player.recovery_timer) {
+        clearTimeout(player.recovery_timer);
+        player.recovery_timer = null;
+    }
+    if (player.resume_timer) {
+        clearTimeout(player.resume_timer);
+        player.resume_timer = null;
+    }
+    update_stream_playback_state(name);
+}
+
+function recheck_offline_stream(name) {
+    $.ajax({
+        url: "/api/twitch/live-status/" + encodeURIComponent(name),
+        timeout: 10000,
+        success: function(data) {
+            var player = stream_players[name];
+            if (!player || !player.offline || data.live !== true) {
+                return;
+            }
+            player.offline = false;
+            reload_stream_playback(name);
+        }
+    });
+}
+
+function schedule_first_load_retry(name, quality) {
+    var retry = stream_first_load_retry[name];
+    if (!retry) {
+        retry = stream_first_load_retry[name] = {attempt: 0, timer: null};
+    }
+    if (retry.timer || retry.attempt >= FIRST_LOAD_MAX_RETRIES) {
+        return;
+    }
+    retry.attempt += 1;
+    var delay = Math.min(2000 * Math.pow(2, retry.attempt - 1), 30000);
+    retry.timer = setTimeout(function() {
+        retry.timer = null;
+        if (stream_first_load_retry[name] !== retry || streams.indexOf(name) === -1 ||
+            stream_players[name] || stream_load_pending[name]) {
+            return;
+        }
+        load_direct_stream(stream_tile_by_name(name), name, true, quality);
+    }, delay);
+}
+
+function cancel_first_load_retry(name) {
+    var retry = stream_first_load_retry[name];
+    if (retry && retry.timer) {
+        clearTimeout(retry.timer);
+    }
+    delete stream_first_load_retry[name];
 }
 
 function stream_api_error_diagnostics(name, xhr, text_status, error_thrown) {
@@ -1609,15 +1732,7 @@ function classify_stream_load_error(tile, name, fallback_message) {
         timeout: 10000,
         success: function(data) {
             if (data.live === false) {
-                var player = stream_players[name];
-                if (player) {
-                    player.recovering = false;
-                    player.stalled = true;
-                    if (player.recovery_timer) {
-                        clearTimeout(player.recovery_timer);
-                        player.recovery_timer = null;
-                    }
-                }
+                mark_stream_offline(name);
                 set_player_status(tile, "Stream offline.");
                 return;
             }
@@ -2029,15 +2144,7 @@ function recover_fatal_hls_error(name, hls, data) {
         return false;
     }
     set_player_status(stream_tile_by_name(name), "Reconnecting stream...");
-    try {
-        var video = player.video;
-        if (video && video.seekable && video.seekable.length) {
-            var live_edge = video.seekable.end(video.seekable.length - 1);
-            if (live_edge - (video.currentTime || 0) > 0.5) {
-                video.currentTime = Math.max(0, live_edge - 0.5);
-            }
-        }
-    } catch (e2) {}
+    seek_player_to_sync_target(player);
     safe_play(player.video);
     return true;
 }
@@ -3079,6 +3186,17 @@ function snap_player_to_live(player) {
             player.hls.startLoad(-1);
         }
     } catch (e) {}
+    seek_player_to_sync_target(player);
+}
+
+// Seek the playhead to the shared convergence wall (or just behind the live
+// edge when no wall is computable) without touching the loader. Recovery paths
+// use this instead of seeking to the raw edge, which lands inside the segment
+// still being written and is immediately seeked back by the convergence tick.
+function seek_player_to_sync_target(player) {
+    if (!player || !player.video) {
+        return;
+    }
     try {
         var video = player.video;
         var seek_to = null;
@@ -3157,7 +3275,15 @@ function ensure_stream_playing(name) {
         player.last_time = current_time;
         player.last_progress_at = now;
         player.stalled = false;
+        player.offline = false;
         update_stream_playback_state(name);
+        return;
+    }
+    if (player.offline) {
+        if (now - player.offline_checked_at >= OFFLINE_RECHECK_INTERVAL) {
+            player.offline_checked_at = now;
+            recheck_offline_stream(name);
+        }
         return;
     }
     if (player.startup_pending && now - player.startup_started_at < 20000) {
@@ -3182,6 +3308,11 @@ function ensure_stream_playing(name) {
         }
         attempt_stream_resume(name);
     } else if (player.stalled || no_progress) {
+        if (player.recovery_timer) {
+            // A backed-off retry is already scheduled; reloading from this tick
+            // as well would bypass the backoff and hammer the resolver.
+            return;
+        }
         mark_stream_stalled(name, "Reconnecting stream...");
         reload_stream_playback(name);
     }
@@ -3205,7 +3336,7 @@ function attempt_stream_resume(name) {
         if (player.video.seekable && player.video.seekable.length) {
             var live_edge = player.video.seekable.end(player.video.seekable.length - 1);
             if (live_edge - player.video.currentTime > 3) {
-                player.video.currentTime = Math.max(0, live_edge - 1);
+                seek_player_to_sync_target(player);
                 resume_start_time = player.video.currentTime;
             }
         }
@@ -3319,7 +3450,7 @@ function schedule_stream_recovery(name) {
         return;
     }
     player.recovery_attempt += 1;
-    var delay = Math.min(1000 * Math.pow(2, player.recovery_attempt - 1), 10000);
+    var delay = Math.min(1000 * Math.pow(2, player.recovery_attempt - 1), 60000);
     player.recovery_timer = setTimeout(function() {
         var current = stream_players[name];
         if (!current) {
@@ -3327,6 +3458,11 @@ function schedule_stream_recovery(name) {
         }
         current.recovery_timer = null;
         current.recovering = false;
+        if (!page_active()) {
+            // Hidden tab: leave it stalled; the playback tick reloads it once
+            // the page is visible again.
+            return;
+        }
         reload_stream_playback(name);
     }, delay);
 }
@@ -3361,6 +3497,7 @@ function toggle_stream_playback(name, event) {
     reveal_tile_controls(stream_tile_by_name(name));
     var player = stream_players[name];
     if (!player) {
+        cancel_first_load_retry(name);
         load_direct_stream(stream_tile_by_name(name), name, true);
         return;
     }
@@ -3370,6 +3507,7 @@ function toggle_stream_playback(name, event) {
         player.recovering = false;
         player.stalled = false;
         player.resume_blocked = false;
+        player.offline = false;
         attempt_stream_resume(name);
     } else {
         player.manual_paused = true;
@@ -3736,23 +3874,6 @@ function stream_name_under_pointer(pointer, exclude_name) {
     return target;
 }
 
-function apply_stream_drop_replacement() {
-    if (!stream_drag_order || !stream_drag_name) {
-        sync_stream_order_from_dom();
-        return;
-    }
-    var target_name = stream_drag_target_name || stream_name_under_pointer(stream_drag_pointer, stream_drag_name);
-    var next_order = stream_drag_order.slice();
-    var from_index = next_order.indexOf(stream_drag_name);
-    var target_index = target_name ? next_order.indexOf(target_name) : -1;
-    if (from_index != -1 && target_index != -1 && from_index != target_index) {
-        next_order[from_index] = target_name;
-        next_order[target_index] = stream_drag_name;
-    }
-    reorder_stream_tiles(next_order);
-    sync_stream_order_from_dom();
-}
-
 function reorder_stream_tiles(order) {
     var container = $("#streams");
     $("#focus_break").detach();
@@ -3841,7 +3962,8 @@ function update_url() {
     for (var i = 0; i < streams.length; i++) {
         new_url = new_url + '/' + encodeURIComponent(streams[i]);
     }
-    history.replaceState(null, "", new_url || "/");
+    // Keep the query string: ?darkmode and the debug flags live there.
+    history.replaceState(null, "", (new_url || "/") + window.location.search);
 }
 
 function render_current_streams() {
@@ -4100,7 +4222,8 @@ function sync_main_size_control() {
         pct = 100;
         inactive = true;
     } else {
-        pct = Math.round((main_size_fractions[layout_mode] || 0.70) * 100);
+        var saved_fraction = main_size_fractions[layout_mode];
+        pct = Math.round((typeof saved_fraction === "number" ? saved_fraction : 0.70) * 100);
     }
     $("#main_size_row").toggleClass("inactive", inactive);
     $("#main_size_slider").prop("disabled", inactive).val(pct);
@@ -4606,7 +4729,13 @@ function poll_go_live() {
         }
         cache_stream_metadata(live);
         render_followed_channels();
-    }, function() {});
+    }, function(xhr) {
+        // Transient failures are ignored (the next poll retries), but an
+        // expired session must surface instead of polling forever.
+        if (xhr && xhr.status == 401) {
+            handle_twitch_api_error(xhr);
+        }
+    });
 }
 
 function index_live_streams(live) {
@@ -4648,26 +4777,30 @@ function twitch_api(path, data, on_success, on_error) {
         data: data,
         traditional: true,
         success: on_success,
-        error: on_error || function(xhr) {
-            var message = (xhr.responseJSON && xhr.responseJSON.error) || "Twitch API error: " + xhr.status + ".";
-            if (xhr.status == 401) {
-                twitch_user = null;
-                followed_channels = [];
-                twitch_live_channels = {};
-                $("#followed_channels").empty();
-                $("#twitch_disconnect_button").hide();
-                set_twitch_state("Offline", "offline");
-                set_twitch_hint(message + " Connect Twitch again.");
-                return;
-            }
-            if (xhr.status == 503) {
-                set_twitch_state("Setup", "setup");
-                set_twitch_hint(message);
-                return;
-            }
-            set_twitch_hint(message);
-        }
+        error: on_error || handle_twitch_api_error
     });
+}
+
+function handle_twitch_api_error(xhr) {
+    var message = (xhr.responseJSON && xhr.responseJSON.error) || "Twitch API error: " + xhr.status + ".";
+    if (xhr.status == 401) {
+        twitch_user = null;
+        followed_channels = [];
+        followed_channels_loaded = false;
+        twitch_live_channels = {};
+        stop_go_live_polling();
+        $("#followed_channels").empty();
+        $("#twitch_disconnect_button").hide();
+        set_twitch_state("Offline", "offline");
+        set_twitch_hint(message + " Connect Twitch again.");
+        return;
+    }
+    if (xhr.status == 503) {
+        set_twitch_state("Setup", "setup");
+        set_twitch_hint(message);
+        return;
+    }
+    set_twitch_hint(message);
 }
 
 function load_followed_channels() {
@@ -4679,18 +4812,24 @@ function load_followed_channels() {
     followed_channels_loaded = false;
     twitch_live_channels = {};
     set_twitch_hint("Loading followed channels...");
-    load_followed_page(null);
+    // A newer load supersedes any still paging, so overlapping loads cannot
+    // both append to the same list.
+    followed_load_seq += 1;
+    load_followed_page(null, followed_load_seq);
 }
 
-function load_followed_page(cursor) {
+function load_followed_page(cursor, load_seq) {
     var params = {first: 100};
     if (cursor) {
         params.after = cursor;
     }
     twitch_api("follows", params, function(data) {
+        if (load_seq !== followed_load_seq) {
+            return;
+        }
         followed_channels = followed_channels.concat(data.data || []);
         if (data.pagination && data.pagination.cursor && followed_channels.length < 1000) {
-            load_followed_page(data.pagination.cursor);
+            load_followed_page(data.pagination.cursor, load_seq);
         } else {
             followed_channels_loaded = true;
             load_followed_live_streams();
