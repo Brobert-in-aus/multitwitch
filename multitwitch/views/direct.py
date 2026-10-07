@@ -124,7 +124,14 @@ def _resolve_stream_url_with_live_check(channel, quality):
 def _resolve_stream_url(channel, quality):
     session = Streamlink()
     session.set_option('http-timeout', 15.0)
-    streams = session.streams('https://www.twitch.tv/' + channel)
+    try:
+        streams = session.streams('https://www.twitch.tv/' + channel)
+    finally:
+        # Streamlink's lru_cache on resolve_url pins every session (and its
+        # keep-alive sockets) long after this call returns, so a fresh session
+        # per resolve leaks file descriptors until the process hits EMFILE.
+        # Closing the HTTP pool releases the sockets immediately.
+        session.http.close()
     if not streams:
         raise RuntimeError(channel + ' is offline or no playable streams were found.')
 
