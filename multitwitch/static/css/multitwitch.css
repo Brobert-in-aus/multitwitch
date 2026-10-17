@@ -316,7 +316,7 @@ iframe {
 .stream_sort_placeholder {
     background: rgba(34, 211, 238, 0.14);
     box-sizing: border-box;
-    border: 1px dashed #22d3ee;
+    border: 2px dashed #22d3ee;
     display: block;
     visibility: visible !important;
 }
@@ -391,6 +391,14 @@ body.chat_resizing #chatbox iframe {
     height: 0;
     margin: 0;
     padding: 0;
+}
+
+/* App chrome, not reading text: Shift-clicking a tile would otherwise extend a
+   page selection across the deck, which hijacks slider drags. Text fields
+   stay selectable. */
+#control_panel,
+#streams {
+    user-select: none;
 }
 
 #control_panel {

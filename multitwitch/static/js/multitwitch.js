@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "126";
+var APP_VERSION = "127";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -540,7 +540,7 @@ function ensure_focus_break() {
 }
 
 function apply_focus_one_l_sizes(width, height) {
-    var tiles = $("#streams .stream");
+    var tiles = absolute_layout_slots();
     $("#focus_break").detach();
     if (tiles.length == 0) {
         return;
@@ -592,7 +592,7 @@ function apply_focus_one_l_sizes(width, height) {
 }
 
 function apply_focus_two_vertical_sizes(width, height) {
-    var tiles = $("#streams .stream");
+    var tiles = absolute_layout_slots();
     $("#focus_break").detach();
     if (tiles.length == 0) {
         return;
@@ -641,6 +641,17 @@ function apply_focus_two_vertical_sizes(width, height) {
             left: zone.x + col * (layout.size.w + TILE_CHROME + FOCUS_GAP),
             top: zone.y + row * (layout.size.h + TILE_CHROME + FOCUS_GAP)
         });
+    });
+}
+
+// The L layouts place every slot by hand (position: absolute), so the sortable
+// placeholder never takes up space on its own. While a tile is being dragged,
+// lay out the placeholder in its place and skip the hidden original and the
+// floating helper (sortable hides the original with an inline display: none),
+// so the slots shift under the pointer like the flow layouts.
+function absolute_layout_slots() {
+    return $("#streams").children(".stream, .stream_sort_placeholder").filter(function() {
+        return !$(this).hasClass("ui-sortable-helper") && this.style.display != "none";
     });
 }
 
@@ -3718,17 +3729,17 @@ function initialize_stream_sorting() {
             stream_drag_order = streams.slice();
             stream_drag_pointer = pointer_from_event(event);
             stream_drag_target_name = null;
-            sync_sortable_preview_size(ui);
+            sync_sortable_preview_size(ui, this);
         },
         sort: function(event, ui) {
             stream_drag_pointer = pointer_from_event(event);
             stream_drag_target_name = stream_name_under_pointer(stream_drag_pointer, stream_drag_name);
-            sync_sortable_preview_size(ui);
+            sync_sortable_helper_size(ui);
         },
         change: function(event, ui) {
             stream_drag_pointer = pointer_from_event(event);
             stream_drag_target_name = stream_name_under_pointer(stream_drag_pointer, stream_drag_name);
-            sync_sortable_preview_size(ui);
+            sync_sortable_preview_size(ui, this);
         },
         update: function() {
             sync_stream_order_from_dom();
@@ -3746,8 +3757,18 @@ function initialize_stream_sorting() {
     });
 }
 
-function sync_sortable_preview_size(ui) {
+// Size the placeholder (and the helper to match) for the slot it now occupies.
+// The L layouts re-run with the placeholder as a slot, which also moves the
+// other tiles; sortable's cached hit areas are then stale and get refreshed.
+function sync_sortable_preview_size(ui, sortable_element) {
     if (!ui || !ui.placeholder || !ui.placeholder.length) {
+        return;
+    }
+    if (relayout_absolute_streams()) {
+        sync_sortable_helper_size(ui);
+        if (sortable_element) {
+            $(sortable_element).sortable("refreshPositions");
+        }
         return;
     }
     var slot_index = sortable_placeholder_index(ui.placeholder);
@@ -3759,6 +3780,29 @@ function sync_sortable_preview_size(ui) {
     if (ui.helper && ui.helper.length) {
         ui.helper.width(slot_size.w).height(slot_size.h);
     }
+}
+
+function sync_sortable_helper_size(ui) {
+    if (!ui || !ui.helper || !ui.helper.length || !ui.placeholder || !ui.placeholder.length) {
+        return;
+    }
+    if (layout_mode == "focus-one" || layout_mode == "focus-two-vertical") {
+        ui.helper.width(ui.placeholder.width()).height(ui.placeholder.height());
+    }
+}
+
+function relayout_absolute_streams() {
+    var width = $("#streams").width();
+    var height = $(window).innerHeight() - 16;
+    if (layout_mode == "focus-one") {
+        apply_focus_one_l_sizes(width, height);
+        return true;
+    }
+    if (layout_mode == "focus-two-vertical") {
+        apply_focus_two_vertical_sizes(width, height);
+        return true;
+    }
+    return false;
 }
 
 function sortable_placeholder_index(placeholder) {
@@ -3801,6 +3845,19 @@ function save_chat_width(width) {
 function clamp_chat_width(width, wrapper_width, min_width, max_width) {
     var max_allowed = Math.max(min_width, Math.min(max_width, wrapper_width - MIN_STREAMS_WIDTH - 5));
     return Math.max(min_width, Math.min(max_allowed, Math.round(width)));
+}
+
+// A leftover text selection (e.g. from Shift-clicking a tile, which extends
+// the selection from the last click) can cover a slider. Chrome then turns a
+// drag on the thumb into a native drag of the selection, so the slider jumps a
+// few pixels and stops under a "no drop" cursor. Drop the selection first.
+function initialize_range_inputs() {
+    $(document).on("mousedown.rangeinput", "input[type=range]", function() {
+        var selection = window.getSelection ? window.getSelection() : null;
+        if (selection && !selection.isCollapsed) {
+            selection.removeAllRanges();
+        }
+    });
 }
 
 function initialize_chat_resizer() {
