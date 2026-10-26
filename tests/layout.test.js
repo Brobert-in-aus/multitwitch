@@ -633,6 +633,35 @@ test("a real stall (playhead frozen) does nudge", () => {
 });
 
 
+test("a persistent offset with no deficit is eventually corrected", () => {
+    const {context} = loadApplication();
+    const base = Date.now();
+    // 1.8s behind the wall while the playhead advances at exactly 1x -- what a
+    // stream sees when the wall moves under it. The first few ticks look like a
+    // PDT artifact and hold 1x; once the offset has persisted it is trusted.
+    const player = deficitFixture(base, 101, -7800);
+    context.stream_players.offset = player;
+    const trust = context.CONVERGENCE_DEFICIT_TRUST_TICKS;
+
+    for (let tick = 1; tick <= trust; tick++) {
+        player.pd_last_at = Date.now() - 1000;
+        player.pd_last_ct = player.video.currentTime - 1;
+        player.hls.playingDate = new Date(Date.now() - 7800);
+        player.hls.latestLevelDetails.fragments[0].programDateTime = Date.now() - 2000;
+        player.video.playbackRate = 1;
+        context.run_convergence();
+        if (tick < trust) {
+            assert.equal(player.video.playbackRate, 1, "held at 1x on tick " + tick);
+        }
+        player.video.currentTime += 1;
+    }
+
+    assert.ok(player.real_lag > 0.3, "the persistent offset is trusted as real lag");
+    assert.ok(player.video.playbackRate > 1 && player.video.playbackRate <= 1.15,
+        "and corrected with a nudge");
+});
+
+
 test("straggler state requires consecutive enter and exit ticks", () => {
     const {context} = loadApplication();
     const fresh = {

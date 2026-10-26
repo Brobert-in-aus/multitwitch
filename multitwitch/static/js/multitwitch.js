@@ -1,7 +1,7 @@
 // Bump on each JS change. Rendered next to the title by the JS itself (not the
 // server template), so a hard refresh always shows the version actually loaded
 // -- even if the dev server cached an older home.tmpl.
-var APP_VERSION = "127";
+var APP_VERSION = "128";
 var chat_hidden = false;
 var num_streams = -1;
 var streams = [];
@@ -120,6 +120,13 @@ var CONVERGENCE_MAX_BEHIND_STEP = 1.5;
 // Upper bound (seconds) on the accumulated playhead-progress deficit, so a
 // pathological session can't let it run away. See convergence_deficit_step.
 var CONVERGENCE_DEFICIT_CLAMP = 30;
+// PDT artifacts are transient (a segment-sized step that unwinds within a
+// playlist refresh or two). An offset that stays outside the dead-band, in the
+// same direction, for this many consecutive ticks is real -- most often the
+// wall itself moved (anchor channel changed, a tile reloaded) without the
+// playhead stalling, which the deficit integrator can't see. Trust `behind`
+// then, or the stream holds 1x at a fixed offset indefinitely.
+var CONVERGENCE_DEFICIT_TRUST_TICKS = 8;
 var convergence_timer = null;
 var convergence_disabled = false;
 var stream_load_pending = {};
@@ -3122,6 +3129,17 @@ function run_convergence() {
             // integration error can't build up over a long session.
             if (Math.abs(behind) < CONVERGENCE_DEADBAND) {
                 entry.player.real_lag = 0;
+                entry.player.offset_ticks = 0;
+            } else {
+                var sign = behind > 0 ? 1 : -1;
+                entry.player.offset_ticks = entry.player.offset_sign === sign
+                    ? (entry.player.offset_ticks || 0) + 1
+                    : 1;
+                entry.player.offset_sign = sign;
+                if (entry.player.offset_ticks >= CONVERGENCE_DEFICIT_TRUST_TICKS &&
+                    Math.abs(entry.player.real_lag || 0) < CONVERGENCE_DEADBAND) {
+                    entry.player.real_lag = behind;
+                }
             }
             var real_lag = entry.player.real_lag || 0;
 
@@ -3144,6 +3162,7 @@ function run_convergence() {
                     // and re-baseline the deficit tracker to the new position.
                     entry.player.last_behind = null;
                     entry.player.real_lag = 0;
+                    entry.player.offset_ticks = 0;
                     entry.player.pd_last_ct = correction.seek_to;
                 }
             } else if (correction.playback_rate !== 1 && Math.abs(real_lag) < CONVERGENCE_DEADBAND) {
